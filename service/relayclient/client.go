@@ -65,7 +65,7 @@ type session struct {
 	sealer *dataplane.Sealer
 	opener *dataplane.Opener
 
-	established chan struct{}
+	established   chan struct{}
 	establishOnce sync.Once
 	result        chan []byte
 	resultOnce    sync.Once

@@ -83,9 +83,9 @@ func QuoteOrder(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, gin.H{
-		"breakdown":     q.Breakdown,
-		"breakdown_min": q.BreakdownMin,
-		"breakdown_max": q.BreakdownMax,
+		"breakdown":      q.Breakdown,
+		"breakdown_min":  q.BreakdownMin,
+		"breakdown_max":  q.BreakdownMax,
 		"chosen_node_id": q.ChosenNodeId,
 	})
 }
@@ -120,11 +120,11 @@ func CreateOrder(c *gin.Context) {
 		return
 	}
 	o, created, err := order.Create(order.CreateRequest{
-		ClientId:        c.GetInt("id"),
-		ScriptId:        req.ScriptId,
-		Version:         req.Version,
-		NodeId:          req.NodeId,
-		ProviderGroupId: req.ProviderGroupId,
+		ClientId:          c.GetInt("id"),
+		ScriptId:          req.ScriptId,
+		Version:           req.Version,
+		NodeId:            req.NodeId,
+		ProviderGroupId:   req.ProviderGroupId,
 		InputHash:         req.InputHash,
 		IdempotencyKey:    idempotencyKey,
 		RelayGB:           req.RelayGB,

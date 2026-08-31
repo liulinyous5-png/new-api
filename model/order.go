@@ -94,9 +94,9 @@ type Order struct {
 	// carried on the order so dispatch can gate node balance and forward the
 	// authoritative value to the provider in the task.offer event.
 	ConsumeMultiplier int64 `json:"consume_multiplier" gorm:"default:1"`
-	LockVersion       int64  `json:"lock_version" gorm:"default:0"`
-	CreatedAt         int64  `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt         int64  `json:"updated_at" gorm:"autoUpdateTime"`
+	LockVersion       int64 `json:"lock_version" gorm:"default:0"`
+	CreatedAt         int64 `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt         int64 `json:"updated_at" gorm:"autoUpdateTime"`
 	// LastError is not persisted; controllers populate it on read from the
 	// latest task attempt's error_code so failed orders can show a real reason.
 	LastError string `json:"last_error,omitempty" gorm:"-"`

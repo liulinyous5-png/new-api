@@ -35,15 +35,15 @@ type ScriptOffer struct {
 	// Busy is true when the node is online but has no available slots for the
 	// selected script (either the node's total capacity or this script's per-node
 	// concurrency limit is exhausted).
-	Busy           bool `json:"busy"`
+	Busy bool `json:"busy"`
 	// Concurrency is this script's per-node concurrency (from the capability).
-	Concurrency    int  `json:"concurrency"`
+	Concurrency int `json:"concurrency"`
 	// AvailableSlots / TotalSlots describe the node's current capacity for this
 	// script: how many more tasks it can accept right now, and its total limit.
-	AvailableSlots int  `json:"available_slots"`
-	TotalSlots     int  `json:"total_slots"`
-	RemainingQuota    int    `json:"remaining_quota"`
-	State             string `json:"state"`
+	AvailableSlots int    `json:"available_slots"`
+	TotalSlots     int    `json:"total_slots"`
+	RemainingQuota int    `json:"remaining_quota"`
+	State          string `json:"state"`
 	// Executions/Successes are this node's task-attempt track record for THIS
 	// script version (not node-wide), matching the provider console's stats.
 	Executions        int64  `json:"executions"`
@@ -111,8 +111,8 @@ func ListOffersForScript(scriptId, version int, providerGroupId string, consumeM
 	}
 	// nodeActiveLease: total active leases per node.
 	type leaseStat struct {
-		NodeId      string
-		TotalActive int64
+		NodeId       string
+		TotalActive  int64
 		ScriptActive int64
 	}
 	var totalLeaseStats []struct {
@@ -445,6 +445,7 @@ func ScheduleCandidates(scriptId, version int, maxPriceMicros int64, limit int, 
 //   - experience (weight 0.30): executions normalized to [0,1] against a cap, so
 //     a proven high-volume node outranks an untried one at similar reliability.
 //   - price (weight 0.15): cheaper breaks near-ties.
+//
 // All three are in [0,1]. A low-success/untried node still only wins when the
 // better ones are busy (excluded from candidates upstream).
 func scoreCandidate(successRate float64, executions, priceMicros, maxPriceMicros int64) float64 {

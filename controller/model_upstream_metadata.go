@@ -36,7 +36,7 @@ type upstreamModelMetadata struct {
 	VendorIcon              string   `json:"vendor_icon,omitempty"`
 	VendorID                int      `json:"vendor_id,omitempty"`
 	SourceChannel           string   `json:"source_channel,omitempty"`
-	Source                   string   `json:"source"`
+	Source                  string   `json:"source"`
 }
 
 type pricingModelEnvelope struct {

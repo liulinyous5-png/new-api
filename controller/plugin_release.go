@@ -102,4 +102,3 @@ func UploadPluginRelease(c *gin.Context) {
 		"updated_at":    release.CreatedAt,
 	})
 }
-

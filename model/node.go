@@ -52,10 +52,10 @@ type Node struct {
 	// online). Default false: a freshly registered node stays out of the market
 	// until its owner lists capabilities, passes their balance checks and turns it
 	// on (PRD N-002 — provider opts in per node).
-	Enabled         bool   `json:"enabled" gorm:"index;default:false"`
-	Region          string `json:"region" gorm:"type:varchar(32)"`
-	Version         string `json:"version" gorm:"type:varchar(32)"`
-	LastSeenAt      int64  `json:"last_seen_at" gorm:"index;default:0"`
+	Enabled    bool   `json:"enabled" gorm:"index;default:false"`
+	Region     string `json:"region" gorm:"type:varchar(32)"`
+	Version    string `json:"version" gorm:"type:varchar(32)"`
+	LastSeenAt int64  `json:"last_seen_at" gorm:"index;default:0"`
 	// Execution outcome counters drive the scheduler's success-rate ranking.
 	SuccessCount int64 `json:"success_count" gorm:"default:0"`
 	FailureCount int64 `json:"failure_count" gorm:"default:0"`
@@ -142,7 +142,7 @@ type NodeCapability struct {
 	UserId     int    `json:"user_id" gorm:"index;not null"`
 	// PriceMicros is deprecated — kept for backward-compat reads from old rows.
 	// New listings use PriceMultiplier × ScriptVersion.BasePriceMicros instead.
-	PriceMicros    int64   `json:"price_micros,omitempty" gorm:"default:0"`
+	PriceMicros int64 `json:"price_micros,omitempty" gorm:"default:0"`
 	// PriceMultiplier is the provider's markup on the script's base price.
 	// Range: 0.5–10. Default 1.0 (pass-through).
 	PriceMultiplier float64 `json:"price_multiplier" gorm:"default:1.0;not null"`

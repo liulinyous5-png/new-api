@@ -8,8 +8,10 @@ upload
 build
 *.db-journal
 logs
-web/dist
+web/default/dist
+web/classic/dist
 web/node_modules
+web/dist
 .env
 one-api
 new-api
@@ -23,6 +25,7 @@ tiktoken_cache
 plans
 .claude
 .cursor
+*.tar
 
 electron/node_modules
 electron/dist

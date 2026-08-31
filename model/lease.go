@@ -45,7 +45,7 @@ type Lease struct {
 	// Active is NULL when released; non-NULL (true) while the lease is held.
 	// The idx_node_active_lease index is NOT unique — multiple active leases per
 	// node are allowed, bounded by the node's total concurrency capacity.
-	Active   *bool  `json:"active" gorm:"index:idx_node_active_lease"`
+	Active *bool `json:"active" gorm:"index:idx_node_active_lease"`
 	// ScriptId and Version track which script this lease is for, enabling the
 	// per-script concurrency limit check during reservation.
 	ScriptId int `json:"script_id" gorm:"index;default:0"`
@@ -55,7 +55,7 @@ type Lease struct {
 	// enforced per (node, category) with a single-table lookup — no join. Zero for
 	// uncategorized scripts (and for leases created before this column existed),
 	// which are exempt from the cooldown.
-	CategoryId int `json:"category_id" gorm:"index:idx_lease_node_category,priority:2;default:0"`
+	CategoryId  int    `json:"category_id" gorm:"index:idx_lease_node_category,priority:2;default:0"`
 	ExpiresAt   int64  `json:"expires_at" gorm:"index;not null"`
 	ReleasedAt  int64  `json:"released_at" gorm:"default:0"`
 	Reason      string `json:"reason,omitempty" gorm:"type:varchar(64)"`

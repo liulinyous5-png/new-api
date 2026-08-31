@@ -75,9 +75,9 @@ func resolveTemplate(scriptId, version int) (*model.PricingTemplate, error) {
 // mode Min == Max == that node's price. In auto mode Min/Max bracket the
 // available offers and Reserve is the price used to size the reservation.
 type providerPrice struct {
-	Min       int64  // cheapest candidate provider bid (per unit, pre-consume)
-	Max       int64  // priciest candidate provider bid — reserved against
-	Reserve   int64  // the bid to reserve/size MaxCustomerMicros against (== Max)
+	Min        int64  // cheapest candidate provider bid (per unit, pre-consume)
+	Max        int64  // priciest candidate provider bid — reserved against
+	Reserve    int64  // the bid to reserve/size MaxCustomerMicros against (== Max)
 	ChosenNode string // non-empty only when the client picked a specific node
 }
 

@@ -50,14 +50,14 @@ func (DeviceChallenge) TableName() string { return "device_challenges" }
 // Device is a registered Provider install instance with its own Ed25519 public
 // key. Only token hashes are stored; raw tokens live only on the device.
 type Device struct {
-	Id               string `json:"id" gorm:"primaryKey;type:varchar(64)"`
-	UserId           int    `json:"user_id" gorm:"index;not null"`
-	PublicKey        string `json:"public_key" gorm:"type:varchar(128);not null"` // base64 Ed25519
-	Name             string `json:"name" gorm:"type:varchar(128)"`
+	Id        string `json:"id" gorm:"primaryKey;type:varchar(64)"`
+	UserId    int    `json:"user_id" gorm:"index;not null"`
+	PublicKey string `json:"public_key" gorm:"type:varchar(128);not null"` // base64 Ed25519
+	Name      string `json:"name" gorm:"type:varchar(128)"`
 	// Nickname is a user-editable label to tell devices apart in the console.
 	// Distinct from Name, which the plugin reports at activation ("browser-node").
-	Nickname string `json:"nickname" gorm:"type:varchar(128)"`
-	Status   string `json:"status" gorm:"type:varchar(16);index;default:active"`
+	Nickname         string `json:"nickname" gorm:"type:varchar(128)"`
+	Status           string `json:"status" gorm:"type:varchar(16);index;default:active"`
 	AccessTokenHash  string `json:"-" gorm:"type:varchar(80);index"`
 	AccessExpiresAt  int64  `json:"access_expires_at" gorm:"default:0"`
 	RefreshTokenHash string `json:"-" gorm:"type:varchar(80);index"`

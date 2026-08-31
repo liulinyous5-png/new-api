@@ -20,28 +20,28 @@ const (
 )
 
 type InvoiceApplication struct {
-	Id             int    `json:"id"`
-	UserId         int    `json:"user_id" gorm:"index;not null"`
-	Username       string `json:"username" gorm:"-:all"`
-	InvoiceType    string `json:"invoice_type" gorm:"type:varchar(16);not null"`
-	ProfileId      int    `json:"profile_id" gorm:"index"`
-	Title          string `json:"title" gorm:"type:varchar(200);not null"`
-	TaxNumber      string `json:"tax_number" gorm:"type:varchar(64)"`
+	Id                int    `json:"id"`
+	UserId            int    `json:"user_id" gorm:"index;not null"`
+	Username          string `json:"username" gorm:"-:all"`
+	InvoiceType       string `json:"invoice_type" gorm:"type:varchar(16);not null"`
+	ProfileId         int    `json:"profile_id" gorm:"index"`
+	Title             string `json:"title" gorm:"type:varchar(200);not null"`
+	TaxNumber         string `json:"tax_number" gorm:"type:varchar(64)"`
 	RegisteredAddress string `json:"registered_address" gorm:"type:varchar(255)"`
 	RegisteredPhone   string `json:"registered_phone" gorm:"type:varchar(64)"`
 	BankName          string `json:"bank_name" gorm:"type:varchar(128)"`
 	BankAccount       string `json:"bank_account" gorm:"type:varchar(64)"`
-	Email          string `json:"email" gorm:"type:varchar(128);not null"`
-	AmountCents    int64  `json:"amount_cents" gorm:"not null"`
-	Remark         string `json:"remark" gorm:"type:varchar(500)"`
-	Status         string `json:"status" gorm:"type:varchar(16);index;not null"`
-	RejectReason   string `json:"reject_reason" gorm:"type:varchar(500)"`
-	ReviewedBy     int    `json:"reviewed_by"`
-	ReviewedAt     int64  `json:"reviewed_at"`
-	SentBy         int    `json:"sent_by"`
-	SentAt         int64  `json:"sent_at"`
-	CreatedAt      int64  `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt      int64  `json:"updated_at" gorm:"autoUpdateTime"`
+	Email             string `json:"email" gorm:"type:varchar(128);not null"`
+	AmountCents       int64  `json:"amount_cents" gorm:"not null"`
+	Remark            string `json:"remark" gorm:"type:varchar(500)"`
+	Status            string `json:"status" gorm:"type:varchar(16);index;not null"`
+	RejectReason      string `json:"reject_reason" gorm:"type:varchar(500)"`
+	ReviewedBy        int    `json:"reviewed_by"`
+	ReviewedAt        int64  `json:"reviewed_at"`
+	SentBy            int    `json:"sent_by"`
+	SentAt            int64  `json:"sent_at"`
+	CreatedAt         int64  `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt         int64  `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
 type InvoiceProfile struct {
@@ -80,20 +80,30 @@ func normalizeInvoiceProfile(profile *InvoiceProfile) error {
 }
 
 func SaveInvoiceProfile(userId int, profile *InvoiceProfile) error {
-	if err := normalizeInvoiceProfile(profile); err != nil { return err }
+	if err := normalizeInvoiceProfile(profile); err != nil {
+		return err
+	}
 	return DB.Transaction(func(tx *gorm.DB) error {
 		if profile.IsDefault {
-			if err := tx.Model(&InvoiceProfile{}).Where("user_id = ?", userId).Update("is_default", false).Error; err != nil { return err }
+			if err := tx.Model(&InvoiceProfile{}).Where("user_id = ?", userId).Update("is_default", false).Error; err != nil {
+				return err
+			}
 		}
 		profile.UserId = userId
-		if profile.Id == 0 { return tx.Create(profile).Error }
+		if profile.Id == 0 {
+			return tx.Create(profile).Error
+		}
 		result := tx.Model(&InvoiceProfile{}).Where("id = ? AND user_id = ?", profile.Id, userId).Updates(map[string]interface{}{
 			"title": profile.Title, "tax_number": profile.TaxNumber, "registered_address": profile.RegisteredAddress,
 			"registered_phone": profile.RegisteredPhone, "bank_name": profile.BankName, "bank_account": profile.BankAccount,
 			"email": profile.Email, "is_default": profile.IsDefault,
 		})
-		if result.Error != nil { return result.Error }
-		if result.RowsAffected != 1 { return errors.New("invoice profile not found") }
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errors.New("invoice profile not found")
+		}
 		return tx.Where("id = ? AND user_id = ?", profile.Id, userId).First(profile).Error
 	})
 }
@@ -106,8 +116,12 @@ func ListInvoiceProfiles(userId int) ([]*InvoiceProfile, error) {
 
 func DeleteInvoiceProfile(userId, id int) error {
 	result := DB.Where("id = ? AND user_id = ?", id, userId).Delete(&InvoiceProfile{})
-	if result.Error != nil { return result.Error }
-	if result.RowsAffected != 1 { return errors.New("invoice profile not found") }
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("invoice profile not found")
+	}
 	return nil
 }
 
@@ -248,9 +262,13 @@ func CreateInvoiceApplication(userId int, application *InvoiceApplication) error
 		application.TaxNumber = strings.TrimSpace(application.TaxNumber)
 		application.Email = strings.TrimSpace(application.Email)
 		if application.InvoiceType == "enterprise" {
-			if application.ProfileId == 0 { return errors.New("select a saved enterprise invoice profile") }
+			if application.ProfileId == 0 {
+				return errors.New("select a saved enterprise invoice profile")
+			}
 			var profile InvoiceProfile
-			if err := tx.Where("id = ? AND user_id = ?", application.ProfileId, userId).First(&profile).Error; err != nil { return errors.New("invoice profile not found") }
+			if err := tx.Where("id = ? AND user_id = ?", application.ProfileId, userId).First(&profile).Error; err != nil {
+				return errors.New("invoice profile not found")
+			}
 			application.Title = profile.Title
 			application.TaxNumber = profile.TaxNumber
 			application.RegisteredAddress = profile.RegisteredAddress
@@ -269,9 +287,13 @@ func CreateInvoiceApplication(userId int, application *InvoiceApplication) error
 			return errors.New("tax number is required for enterprise invoices")
 		}
 		paid, err := paidTopUpCents(tx, userId)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		occupied, err := invoiceOccupiedCents(tx, userId)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		if application.AmountCents > paid-occupied {
 			return errors.New("invoice amount exceeds available paid amount")
 		}
@@ -282,27 +304,56 @@ func CreateInvoiceApplication(userId int, application *InvoiceApplication) error
 
 func CancelInvoiceApplication(userId, id int) error {
 	result := DB.Model(&InvoiceApplication{}).Where("id = ? AND user_id = ? AND status IN ?", id, userId, []string{InvoiceStatusPending, InvoiceStatusRejected}).Update("status", InvoiceStatusCancelled)
-	if result.Error != nil { return result.Error }
-	if result.RowsAffected != 1 { return errors.New("only pending or rejected applications can be cancelled") }
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("only pending or rejected applications can be cancelled")
+	}
 	return nil
 }
 
 func ListInvoiceApplications(status string) ([]*InvoiceApplication, error) {
 	query := DB.Table("invoice_applications AS i").Select("i.*, u.username").Joins("LEFT JOIN users AS u ON u.id = i.user_id").Order("i.id DESC")
-	if status != "" { query = query.Where("i.status = ?", status) }
+	if status != "" {
+		query = query.Where("i.status = ?", status)
+	}
 	var items []*InvoiceApplication
-	if err := query.Scan(&items).Error; err != nil { return nil, err }
+	if err := query.Scan(&items).Error; err != nil {
+		return nil, err
+	}
 	return items, nil
 }
 
 func ReviewInvoiceApplication(id, adminId int, approve bool, reason string) error {
 	updates := map[string]interface{}{"reviewed_by": adminId, "reviewed_at": common.GetTimestamp()}
-	if approve { updates["status"] = InvoiceStatusApproved; updates["reject_reason"] = "" } else { if strings.TrimSpace(reason) == "" { return errors.New("rejection reason is required") }; updates["status"] = InvoiceStatusRejected; updates["reject_reason"] = strings.TrimSpace(reason) }
+	if approve {
+		updates["status"] = InvoiceStatusApproved
+		updates["reject_reason"] = ""
+	} else {
+		if strings.TrimSpace(reason) == "" {
+			return errors.New("rejection reason is required")
+		}
+		updates["status"] = InvoiceStatusRejected
+		updates["reject_reason"] = strings.TrimSpace(reason)
+	}
 	result := DB.Model(&InvoiceApplication{}).Where("id = ? AND status = ?", id, InvoiceStatusPending).Updates(updates)
-	if result.Error != nil { return result.Error }; if result.RowsAffected != 1 { return errors.New("only pending applications can be reviewed") }; return nil
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("only pending applications can be reviewed")
+	}
+	return nil
 }
 
 func MarkInvoiceSent(id, adminId int) error {
 	result := DB.Model(&InvoiceApplication{}).Where("id = ? AND status = ?", id, InvoiceStatusApproved).Updates(map[string]interface{}{"status": InvoiceStatusSent, "sent_by": adminId, "sent_at": common.GetTimestamp()})
-	if result.Error != nil { return result.Error }; if result.RowsAffected != 1 { return errors.New("only approved applications can be marked as sent") }; return nil
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("only approved applications can be marked as sent")
+	}
+	return nil
 }

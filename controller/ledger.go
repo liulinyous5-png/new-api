@@ -180,7 +180,7 @@ type withdrawEarningsRequest struct {
 // forfeited (not credited anywhere), so a 10-unit withdrawal credits 9.5 to the
 // wallet.
 const (
-	minWithdrawAvailableMicros int64 = 10_000_000 // 10 units (1 unit = 1,000,000 micros)
+	minWithdrawAvailableMicros  int64 = 10_000_000 // 10 units (1 unit = 1,000,000 micros)
 	withdrawAvailableFeeRatePpm int64 = 50_000     // 5% (parts-per-million)
 )
 

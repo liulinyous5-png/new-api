@@ -29,19 +29,29 @@ var (
 
 func getConcurrencyReserver() *limiter.ConcurrencyReserver {
 	concurrencyReserverOnce.Do(func() {
-		if common.RedisEnabled { concurrencyReserver = limiter.NewConcurrencyReserver(common.RDB) } else { concurrencyReserver = limiter.NewConcurrencyReserver(nil) }
+		if common.RedisEnabled {
+			concurrencyReserver = limiter.NewConcurrencyReserver(common.RDB)
+		} else {
+			concurrencyReserver = limiter.NewConcurrencyReserver(nil)
+		}
 	})
 	return concurrencyReserver
 }
 
-func concurrencyReserveKey(userId int, modelName string) string { return fmt.Sprintf("concurrency:reserve:%d:%s", userId, modelName) }
-func userConcurrencyReserveKey(userId int) string { return fmt.Sprintf("concurrency:reserve:%d:all", userId) }
+func concurrencyReserveKey(userId int, modelName string) string {
+	return fmt.Sprintf("concurrency:reserve:%d:%s", userId, modelName)
+}
+func userConcurrencyReserveKey(userId int) string {
+	return fmt.Sprintf("concurrency:reserve:%d:all", userId)
+}
 
 // AcquireModelConcurrency applies both the per-model and per-user async limits.
 func AcquireModelConcurrency(c *gin.Context, userId int, modelName string) (release func(), taskErr *dto.TaskError) {
 	release = func() {}
 	modelName = strings.TrimSpace(modelName)
-	if userId <= 0 || modelName == "" { return release, nil }
+	if userId <= 0 || modelName == "" {
+		return release, nil
+	}
 
 	maxConcurrency := model.GetModelConcurrencyLimit(userId, modelName)
 	if maxConcurrency <= model.ModelConcurrencyBlocked {
@@ -49,15 +59,23 @@ func AcquireModelConcurrency(c *gin.Context, userId int, modelName string) (rele
 		return release, TaskErrorWrapperLocal(fmt.Errorf("%s", message), ModelNotAllowedCode, http.StatusForbidden)
 	}
 	member := c.GetString(common.RequestIdKey)
-	if member == "" { member = common.NewRequestId() }
+	if member == "" {
+		member = common.NewRequestId()
+	}
 	reserver := getConcurrencyReserver()
 	modelKey := concurrencyReserveKey(userId, modelName)
 	modelReserved := false
 	if maxConcurrency > 0 {
 		dbCount, err := model.CountUnfinishedTaskByUserModel(userId, modelName)
-		if err != nil { logger.LogError(c, fmt.Sprintf("count unfinished task for concurrency limit failed: %s", err.Error())); return release, nil }
+		if err != nil {
+			logger.LogError(c, fmt.Sprintf("count unfinished task for concurrency limit failed: %s", err.Error()))
+			return release, nil
+		}
 		allowed, used, err := reserver.Reserve(c, modelKey, member, dbCount, maxConcurrency, ModelConcurrencyReserveTTL)
-		if err != nil { logger.LogError(c, fmt.Sprintf("reserve model concurrency slot failed: %s", err.Error())); return release, nil }
+		if err != nil {
+			logger.LogError(c, fmt.Sprintf("reserve model concurrency slot failed: %s", err.Error()))
+			return release, nil
+		}
 		if !allowed {
 			message := i18n.T(c, i18n.MsgModelConcurrencyLimitReached, map[string]any{"Model": modelName, "Max": maxConcurrency, "Current": used})
 			return release, TaskErrorWrapperLocal(fmt.Errorf("%s", message), ConcurrencyLimitReachedCode, http.StatusTooManyRequests)
@@ -77,11 +95,25 @@ func AcquireModelConcurrency(c *gin.Context, userId int, modelName string) (rele
 	}
 	if userMaxConcurrency > 0 {
 		dbCount, err := model.CountUnfinishedTaskByUser(userId)
-		if err != nil { logger.LogError(c, fmt.Sprintf("count unfinished task for user concurrency limit failed: %s", err.Error())); if modelReserved { reserver.Release(c, modelKey, member) }; return release, nil }
+		if err != nil {
+			logger.LogError(c, fmt.Sprintf("count unfinished task for user concurrency limit failed: %s", err.Error()))
+			if modelReserved {
+				reserver.Release(c, modelKey, member)
+			}
+			return release, nil
+		}
 		allowed, used, err := reserver.Reserve(c, userKey, member, dbCount, userMaxConcurrency, ModelConcurrencyReserveTTL)
-		if err != nil { logger.LogError(c, fmt.Sprintf("reserve user concurrency slot failed: %s", err.Error())); if modelReserved { reserver.Release(c, modelKey, member) }; return release, nil }
+		if err != nil {
+			logger.LogError(c, fmt.Sprintf("reserve user concurrency slot failed: %s", err.Error()))
+			if modelReserved {
+				reserver.Release(c, modelKey, member)
+			}
+			return release, nil
+		}
 		if !allowed {
-			if modelReserved { reserver.Release(c, modelKey, member) }
+			if modelReserved {
+				reserver.Release(c, modelKey, member)
+			}
 			message := i18n.T(c, i18n.MsgUserConcurrencyLimitReached, map[string]any{"Max": userMaxConcurrency, "Current": used})
 			return release, TaskErrorWrapperLocal(fmt.Errorf("%s", message), UserConcurrencyLimitReachedCode, http.StatusTooManyRequests)
 		}
@@ -90,9 +122,15 @@ func AcquireModelConcurrency(c *gin.Context, userId int, modelName string) (rele
 
 	released := false
 	return func() {
-		if released { return }
+		if released {
+			return
+		}
 		released = true
-		if modelReserved { reserver.Release(c, modelKey, member) }
-		if userReserved { reserver.Release(c, userKey, member) }
+		if modelReserved {
+			reserver.Release(c, modelKey, member)
+		}
+		if userReserved {
+			reserver.Release(c, userKey, member)
+		}
 	}, nil
 }

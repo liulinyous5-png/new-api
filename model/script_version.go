@@ -48,20 +48,20 @@ type ScriptVersion struct {
 	// PricingRules is a JSON array of PricingRule objects that describe how
 	// individual task parameters map to price multipliers. Stored as text so it
 	// is human-readable and survives schema-free evolution. Empty means flat rate.
-	PricingRules string `json:"pricing_rules,omitempty" gorm:"type:text"`
-	Code           string `json:"code,omitempty" gorm:"type:mediumtext"`
-	CodeSha256     string `json:"code_sha256" gorm:"type:varchar(80);index"`
-	SignatureKeyId string `json:"signature_key_id" gorm:"type:varchar(64)"`
-	Signature      string `json:"signature" gorm:"type:varchar(256)"`
-	ReviewStatus   string `json:"review_status" gorm:"type:varchar(16);index;default:approved"`
-	PublishedAt    int64  `json:"published_at" gorm:"bigint;index"`
-	RevokedAt      int64  `json:"revoked_at" gorm:"bigint;default:0;index"`
-	RevokedReason  string `json:"revoked_reason,omitempty" gorm:"type:varchar(512)"`
-	RevokeSeverity string `json:"revoke_severity,omitempty" gorm:"type:varchar(16)"`
-	CreatedAt      int64  `json:"created_at" gorm:"autoCreateTime"`
-	AuthorUsername      string `json:"author_username,omitempty" gorm:"-"`
-	AuthorShareRatePPM   int64  `json:"author_share_rate_ppm" gorm:"-"`
-	PlatformFeeRatePPM   int64  `json:"platform_fee_rate_ppm" gorm:"-"`
+	PricingRules       string `json:"pricing_rules,omitempty" gorm:"type:text"`
+	Code               string `json:"code,omitempty" gorm:"type:mediumtext"`
+	CodeSha256         string `json:"code_sha256" gorm:"type:varchar(80);index"`
+	SignatureKeyId     string `json:"signature_key_id" gorm:"type:varchar(64)"`
+	Signature          string `json:"signature" gorm:"type:varchar(256)"`
+	ReviewStatus       string `json:"review_status" gorm:"type:varchar(16);index;default:approved"`
+	PublishedAt        int64  `json:"published_at" gorm:"bigint;index"`
+	RevokedAt          int64  `json:"revoked_at" gorm:"bigint;default:0;index"`
+	RevokedReason      string `json:"revoked_reason,omitempty" gorm:"type:varchar(512)"`
+	RevokeSeverity     string `json:"revoke_severity,omitempty" gorm:"type:varchar(16)"`
+	CreatedAt          int64  `json:"created_at" gorm:"autoCreateTime"`
+	AuthorUsername     string `json:"author_username,omitempty" gorm:"-"`
+	AuthorShareRatePPM int64  `json:"author_share_rate_ppm" gorm:"-"`
+	PlatformFeeRatePPM int64  `json:"platform_fee_rate_ppm" gorm:"-"`
 }
 
 func (ScriptVersion) TableName() string {

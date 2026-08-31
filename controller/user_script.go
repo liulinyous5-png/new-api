@@ -22,23 +22,23 @@ type userScriptSaveRequest struct {
 	// Concurrency is the maximum simultaneous executions this script supports
 	// on a single node (default 1). Authors set this to match the target site's
 	// capacity; providers and buyers see it when browsing the marketplace.
-	Concurrency        int             `json:"concurrency"`
-	MinIntervalSeconds int             `json:"min_interval_seconds"`
-	BasePriceMicros    int64           `json:"base_price_micros"`
+	Concurrency        int   `json:"concurrency"`
+	MinIntervalSeconds int   `json:"min_interval_seconds"`
+	BasePriceMicros    int64 `json:"base_price_micros"`
 	// PricingRules is sent by the frontend as a JSON array; we accept it as
 	// RawMessage so it survives the decode regardless of Go field type.
-	PricingRules       json.RawMessage `json:"pricing_rules"`
+	PricingRules json.RawMessage `json:"pricing_rules"`
 }
 
 type publishedScriptListItem struct {
-	Id           int    `json:"id"`
-	Title        string `json:"title"`
-	Description  string `json:"description"`
-	ScriptParams string `json:"script_params"`
-	PublishedAt  int64  `json:"published_at"`
-	CreatedAt    int64  `json:"created_at"`
-	UpdatedAt    int64  `json:"updated_at"`
-	LatestVersion int   `json:"latest_version"`
+	Id            int    `json:"id"`
+	Title         string `json:"title"`
+	Description   string `json:"description"`
+	ScriptParams  string `json:"script_params"`
+	PublishedAt   int64  `json:"published_at"`
+	CreatedAt     int64  `json:"created_at"`
+	UpdatedAt     int64  `json:"updated_at"`
+	LatestVersion int    `json:"latest_version"`
 }
 
 func parseScriptId(c *gin.Context) (int, bool) {
@@ -199,13 +199,13 @@ func ApiListPublishedScripts(c *gin.Context) {
 	items := make([]publishedScriptListItem, 0, len(scripts))
 	for _, script := range scripts {
 		items = append(items, publishedScriptListItem{
-			Id:           script.Id,
-			Title:        script.Title,
-			Description:  script.Description,
-			ScriptParams: script.ScriptParams,
-			PublishedAt:  script.PublishedAt,
-			CreatedAt:    script.CreatedAt,
-			UpdatedAt:    script.UpdatedAt,
+			Id:            script.Id,
+			Title:         script.Title,
+			Description:   script.Description,
+			ScriptParams:  script.ScriptParams,
+			PublishedAt:   script.PublishedAt,
+			CreatedAt:     script.CreatedAt,
+			UpdatedAt:     script.UpdatedAt,
 			LatestVersion: script.LatestVersion,
 		})
 	}
