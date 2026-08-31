@@ -50,6 +50,10 @@ func InitOptionMap() {
 	common.OptionMap["AutomaticDisableChannelEnabled"] = strconv.FormatBool(common.AutomaticDisableChannelEnabled)
 	common.OptionMap["AutomaticEnableChannelEnabled"] = strconv.FormatBool(common.AutomaticEnableChannelEnabled)
 	common.OptionMap["LogConsumeEnabled"] = strconv.FormatBool(common.LogConsumeEnabled)
+	common.OptionMap["TTFTTimeoutSeconds"] = strconv.Itoa(constant.TTFTTimeoutSeconds)
+	common.OptionMap["ErrorWebhookAlertEnabled"] = strconv.FormatBool(setting.ErrorWebhookAlertEnabled)
+	common.OptionMap["ErrorWebhookAlertURL"] = setting.ErrorWebhookAlertURL
+	common.OptionMap["ErrorWebhookAlertSecret"] = setting.ErrorWebhookAlertSecret
 	common.OptionMap["DisplayInCurrencyEnabled"] = strconv.FormatBool(common.DisplayInCurrencyEnabled)
 	common.OptionMap["DisplayTokenStatEnabled"] = strconv.FormatBool(common.DisplayTokenStatEnabled)
 	common.OptionMap["DrawingEnabled"] = strconv.FormatBool(common.DrawingEnabled)
@@ -346,6 +350,8 @@ func updateOptionMap(key string, value string) (err error) {
 			common.AutomaticEnableChannelEnabled = boolValue
 		case "LogConsumeEnabled":
 			common.LogConsumeEnabled = boolValue
+		case "ErrorWebhookAlertEnabled":
+			setting.ErrorWebhookAlertEnabled = boolValue
 		case "DisplayInCurrencyEnabled":
 			// 兼容旧字段：同步到新配置 general_setting.quota_display_type（运行时生效）
 			// true -> USD, false -> TOKENS
@@ -571,6 +577,15 @@ func updateOptionMap(key string, value string) (err error) {
 		err = setting.UpdateModelRequestRateLimitGroupByJSONString(value)
 	case "RetryTimes":
 		common.RetryTimes, _ = strconv.Atoi(value)
+	case "TTFTTimeoutSeconds":
+		timeoutSeconds, parseErr := strconv.Atoi(value)
+		if parseErr != nil {
+			return parseErr
+		}
+		if timeoutSeconds < 0 {
+			timeoutSeconds = 0
+		}
+		constant.TTFTTimeoutSeconds = timeoutSeconds
 	case "DataExportInterval":
 		common.DataExportInterval, _ = strconv.Atoi(value)
 	case "DataExportDefaultTime":
@@ -617,6 +632,10 @@ func updateOptionMap(key string, value string) (err error) {
 		err = operation_setting.AutomaticRetryStatusCodesFromString(value)
 	case "StreamCacheQueueLength":
 		setting.StreamCacheQueueLength, _ = strconv.Atoi(value)
+	case "ErrorWebhookAlertURL":
+		setting.ErrorWebhookAlertURL = value
+	case "ErrorWebhookAlertSecret":
+		setting.ErrorWebhookAlertSecret = value
 	case "PayMethods":
 		err = operation_setting.UpdatePayMethodsByJsonString(value)
 	case "WaffoPayMethods":

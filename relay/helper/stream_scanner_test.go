@@ -571,3 +571,82 @@ func TestStreamScannerHandler_StreamStatus_ReplacesPreInitialized(t *testing.T) 
 	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
 	assert.Equal(t, 0, info.StreamStatus.TotalErrorCount())
 }
+
+func TestStreamScannerHandler_TTFTZeroDoesNotFire(t *testing.T) {
+	oldTimeout := constant.StreamingTimeout
+	oldTTFTTimeout := constant.TTFTTimeoutSeconds
+	constant.StreamingTimeout = 30
+	constant.TTFTTimeoutSeconds = 0
+	t.Cleanup(func() {
+		constant.StreamingTimeout = oldTimeout
+		constant.TTFTTimeoutSeconds = oldTTFTTimeout
+	})
+
+	pr, pw := io.Pipe()
+	go func() {
+		defer pw.Close()
+		time.Sleep(200 * time.Millisecond)
+		fmt.Fprint(pw, "data: {\"id\":1}\n")
+		fmt.Fprint(pw, "data: [DONE]\n")
+	}()
+
+	c, resp, info := setupStreamTest(t, pr)
+	info.StartTime = time.Now()
+
+	done := make(chan struct{})
+	go func() {
+		StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for stream with TTFT disabled")
+	}
+
+	require.NotNil(t, info.StreamStatus)
+	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
+	assert.False(t, info.StreamStatus.HasErrors())
+	assert.Equal(t, 1, info.ReceivedResponseCount)
+}
+
+func TestStreamScannerHandler_StreamStatus_TTFTTimeoutNoInterrupt(t *testing.T) {
+	oldTimeout := constant.StreamingTimeout
+	oldTTFTTimeout := constant.TTFTTimeoutSeconds
+	constant.StreamingTimeout = 30
+	constant.TTFTTimeoutSeconds = 1
+	t.Cleanup(func() {
+		constant.StreamingTimeout = oldTimeout
+		constant.TTFTTimeoutSeconds = oldTTFTTimeout
+	})
+
+	pr, pw := io.Pipe()
+	go func() {
+		defer pw.Close()
+		time.Sleep(1500 * time.Millisecond)
+		fmt.Fprint(pw, "data: {\"id\":1}\n")
+		fmt.Fprint(pw, "data: [DONE]\n")
+	}()
+
+	c, resp, info := setupStreamTest(t, pr)
+	info.StartTime = time.Now()
+
+	done := make(chan struct{})
+	go func() {
+		StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for ttft timeout")
+	}
+
+	require.NotNil(t, info.StreamStatus)
+	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
+	assert.True(t, info.StreamStatus.IsNormalEnd())
+	assert.False(t, info.StreamStatus.HasErrors())
+	assert.Equal(t, 1, info.ReceivedResponseCount)
+}

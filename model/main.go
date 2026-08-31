@@ -330,6 +330,7 @@ func migrateDB() error {
 
 	err := DB.AutoMigrate(
 		&Channel{},
+		&GroupChannelFallback{},
 		&Token{},
 		&User{},
 		&UserSession{},

@@ -1,6 +1,11 @@
 package constant
 
 var StreamingTimeout int
+
+// TTFTTimeoutSeconds is the max wait before the first valid stream chunk, in seconds.
+// 0 disables the timeout so streaming behavior matches the previous default.
+var TTFTTimeoutSeconds int
+
 var DifyDebug bool
 var MaxFileDownloadMB int
 var StreamScannerMaxBufferMB int

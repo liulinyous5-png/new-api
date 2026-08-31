@@ -177,6 +177,9 @@ func positiveUserSessionEnv(name string, fallback int) int {
 
 func initConstantEnv() {
 	constant.StreamingTimeout = GetEnvOrDefault("STREAMING_TIMEOUT", 300)
+	// 0 disables first-token timeout so existing streaming behavior is unchanged
+	// until operators explicitly enable it via env or the operations setting.
+	constant.TTFTTimeoutSeconds = GetEnvOrDefault("TTFT_TIMEOUT_SECONDS", 0)
 	constant.DifyDebug = GetEnvOrDefaultBool("DIFY_DEBUG", true)
 	constant.MaxFileDownloadMB = GetEnvOrDefault("MAX_FILE_DOWNLOAD_MB", 64)
 	constant.StreamScannerMaxBufferMB = GetEnvOrDefault("STREAM_SCANNER_MAX_BUFFER_MB", 128)

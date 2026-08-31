@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/types"
 
+	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 
 	"gorm.io/gorm"
@@ -355,6 +356,10 @@ type RecordConsumeLogParams struct {
 	Other            map[string]interface{} `json:"other"`
 }
 
+// OnConsumeLogRecorded is an optional async callback invoked after consume log persistence.
+// It is wired by main/service to avoid introducing model -> service import cycles.
+var OnConsumeLogRecorded func(log *Log, userId int, params RecordConsumeLogParams)
+
 func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
 	if !common.LogConsumeEnabled {
 		return
@@ -401,6 +406,13 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	err := createLog(log)
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
+	}
+	if OnConsumeLogRecorded != nil {
+		logCopy := *log
+		paramsCopy := params
+		gopool.Go(func() {
+			OnConsumeLogRecorded(&logCopy, userId, paramsCopy)
+		})
 	}
 	if common.DataExportEnabled {
 		LogQuotaData(QuotaDataLogParams{

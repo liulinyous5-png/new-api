@@ -77,8 +77,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	//originalModel := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 
 	var (
-		newAPIError *types.NewAPIError
-		ws          *websocket.Conn
+		newAPIError      *types.NewAPIError
+		ws               *websocket.Conn
+		lastTriedChannel *model.Channel
+		retryExhausted   bool
 	)
 
 	if relayFormat == types.RelayFormatOpenAIRealtime {
@@ -201,6 +203,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = channelErr
 			break
 		}
+		lastTriedChannel = channel
 		addUsedChannel(c, channel.Id)
 		if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
 			newAPIError = billingErr
@@ -240,8 +243,20 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 
-		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
+		remainingRetry := common.RetryTimes - retryParam.GetRetry()
+		if !shouldRetry(c, newAPIError, remainingRetry) {
+			retryExhausted = remainingRetry <= 0
 			break
+		}
+	}
+
+	if newAPIError != nil && retryExhausted {
+		handled, fallbackErr := tryGroupFallbackAfterRetryExhausted(c, relayInfo, relayFormat, retryParam, lastTriedChannel)
+		if handled {
+			if fallbackErr == nil {
+				return
+			}
+			newAPIError = fallbackErr
 		}
 	}
 
@@ -362,6 +377,109 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	return operation_setting.ShouldRetryByStatusCode(code)
 }
 
+func tryGroupFallbackAfterRetryExhausted(
+	c *gin.Context,
+	relayInfo *relaycommon.RelayInfo,
+	relayFormat types.RelayFormat,
+	retryParam *service.RetryParam,
+	lastChannel *model.Channel,
+) (handled bool, fallbackErr *types.NewAPIError) {
+	if c == nil || relayInfo == nil || retryParam == nil || lastChannel == nil {
+		return false, nil
+	}
+	if _, ok := c.Get("specific_channel_id"); ok {
+		return false, nil
+	}
+
+	lookupGroup := service.ResolveFallbackLookupGroup(c, retryParam)
+	if lookupGroup == "" {
+		return false, nil
+	}
+
+	fallbackChannel, resolveErr := service.ResolveGroupFallbackChannel(lookupGroup, lastChannel.Type)
+	if resolveErr != nil {
+		logger.LogWarn(c, fmt.Sprintf("resolve group fallback failed: group=%s, channel_type=%d, err=%v", lookupGroup, lastChannel.Type, resolveErr))
+		return false, nil
+	}
+	if fallbackChannel == nil {
+		return false, nil
+	}
+	if fallbackChannel.Id == lastChannel.Id {
+		logger.LogWarn(c, fmt.Sprintf("skip group fallback because fallback channel equals last tried channel: channel_id=%d", fallbackChannel.Id))
+		return false, nil
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			handled = true
+			fallbackErr = types.NewErrorWithStatusCode(
+				fmt.Errorf("panic in group fallback relay: %v", r),
+				types.ErrorCodeBadResponse,
+				http.StatusInternalServerError,
+			)
+		}
+	}()
+
+	if setupErr := middleware.SetupContextForSelectedChannel(c, fallbackChannel, relayInfo.OriginModelName); setupErr != nil {
+		return true, setupErr
+	}
+	addUsedChannel(c, fallbackChannel.Id)
+	if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
+		return true, billingErr
+	}
+
+	bodyStorage, bodyErr := common.GetBodyStorage(c)
+	if bodyErr != nil {
+		if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {
+			return true, types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, types.ErrOptionWithSkipRetry())
+		}
+		return true, types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	c.Request.Body = io.NopCloser(bodyStorage)
+
+	relayInfo.RetryIndex = common.RetryTimes + 1
+	relayInfo.LastError = nil
+
+	newAPIError := runRelayOnceWithCurrentContext(c, relayInfo, relayFormat)
+	if newAPIError == nil {
+		logger.LogInfo(c, fmt.Sprintf("group fallback succeeded: group=%s, channel_type=%d, fallback_channel_id=%d", lookupGroup, lastChannel.Type, fallbackChannel.Id))
+		relayInfo.LastError = nil
+		return true, nil
+	}
+
+	newAPIError = service.NormalizeViolationFeeError(newAPIError)
+	relayInfo.LastError = newAPIError
+	processChannelError(c,
+		*types.NewChannelError(
+			fallbackChannel.Id,
+			fallbackChannel.Type,
+			fallbackChannel.Name,
+			fallbackChannel.ChannelInfo.IsMultiKey,
+			common.GetContextKeyString(c, constant.ContextKeyChannelKey),
+			fallbackChannel.GetAutoBan(),
+		),
+		newAPIError,
+	)
+	logger.LogWarn(c, fmt.Sprintf(
+		"group fallback failed: group=%s, channel_type=%d, fallback_channel_id=%d, err=%s",
+		lookupGroup, lastChannel.Type, fallbackChannel.Id, common.LocalLogPreview(newAPIError.Error()),
+	))
+	return true, newAPIError
+}
+
+func runRelayOnceWithCurrentContext(c *gin.Context, info *relaycommon.RelayInfo, relayFormat types.RelayFormat) *types.NewAPIError {
+	switch relayFormat {
+	case types.RelayFormatOpenAIRealtime:
+		return relay.WssHelper(c, info)
+	case types.RelayFormatClaude:
+		return relay.ClaudeHelper(c, info)
+	case types.RelayFormatGemini:
+		return geminiRelayHandler(c, info)
+	default:
+		return relayHandler(c, info)
+	}
+}
+
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.Error())))
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
@@ -406,6 +524,46 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		}
 		useTimeSeconds := int(time.Since(startTime).Seconds())
 		model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
+	}
+
+	if types.IsRecordErrorLog(err) {
+		userId := c.GetInt("id")
+		tokenName := c.GetString("token_name")
+		modelName := c.GetString("original_model")
+		userGroup := c.GetString("group")
+		channelId := c.GetInt("channel_id")
+		requestPath := ""
+		if c.Request != nil && c.Request.URL != nil {
+			requestPath = c.Request.URL.Path
+		}
+		startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
+		if startTime.IsZero() {
+			startTime = time.Now()
+		}
+		useTimeSeconds := int(time.Since(startTime).Seconds())
+		alertPayload := service.ErrorLogAlertPayload{
+			UserID:            userId,
+			Username:          c.GetString("username"),
+			Group:             userGroup,
+			ModelName:         modelName,
+			TokenName:         tokenName,
+			ChannelID:         channelId,
+			ChannelName:       c.GetString("channel_name"),
+			ChannelType:       c.GetInt("channel_type"),
+			StatusCode:        err.StatusCode,
+			ErrorCode:         string(err.GetErrorCode()),
+			ErrorType:         string(err.GetErrorType()),
+			ErrorMessage:      err.MaskSensitiveErrorWithStatusCode(),
+			RequestPath:       requestPath,
+			RequestID:         c.GetString(common.RequestIdKey),
+			UpstreamRequestID: c.GetString(common.UpstreamRequestIdKey),
+			UseTimeSeconds:    useTimeSeconds,
+			IsStream:          common.GetContextKeyBool(c, constant.ContextKeyIsStream),
+			RetryChain:        c.GetStringSlice("use_channel"),
+		}
+		gopool.Go(func() {
+			service.HandleErrorLogWebhookAlert(alertPayload)
+		})
 	}
 
 }

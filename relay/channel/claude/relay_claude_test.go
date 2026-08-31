@@ -1,15 +1,35 @@
 package claude
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
+	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHandleStreamResponseDataForwardsClaudeErrorEvent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	info := &relaycommon.RelayInfo{RelayFormat: relaytypes.RelayFormatClaude}
+	claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
+	data := `{"type":"error","error":{"type":"invalid_request_error","message":"Provider returned no content"},"provider_meta":{"trace_id":"trace_123"}}`
+
+	err := HandleStreamResponseData(c, info, claudeInfo, data)
+
+	require.NotNil(t, err)
+	assert.Contains(t, recorder.Body.String(), "event: error\n")
+	assert.Contains(t, recorder.Body.String(), "data: "+data)
+}
 
 func commonPointer[T any](value T) *T {
 	return &value

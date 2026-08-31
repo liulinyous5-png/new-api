@@ -352,6 +352,8 @@ func InitResources() error {
 
 	perfmetrics.Init()
 
+	model.OnConsumeLogRecorded = service.HandleConsumeLogForTTFTMonitor
+
 	// 启动系统监控
 	common.StartSystemMonitor()
 

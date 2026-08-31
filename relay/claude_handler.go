@@ -158,73 +158,96 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		return nil
 	}
 
-	var requestBody io.Reader
-	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
-		storage, err := common.GetBodyStorage(c)
-		if err != nil {
-			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
-		}
-		requestBody = common.NewReplayableBodyReader(storage)
-	} else {
-		convertedRequest, err := adaptor.ConvertClaudeRequest(c, info, request)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
-		jsonData, err := common.Marshal(convertedRequest)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+	statusCodeMappingStr := c.GetString("status_code_mapping")
+
+	buildRequestBody := func(forceMarshalFromRequest bool) (io.Reader, func(), *types.NewAPIError) {
+		if (model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled) && !forceMarshalFromRequest {
+			storage, bodyErr := common.GetBodyStorage(c)
+			if bodyErr != nil {
+				return nil, nil, types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			}
+			return common.NewReplayableBodyReader(storage), nil, nil
 		}
 
-		// remove disabled fields for Claude API
-		jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		var outboundRequest any
+		if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
+			outboundRequest = request
+		} else {
+			convertedRequest, convErr := adaptor.ConvertClaudeRequest(c, info, request)
+			if convErr != nil {
+				return nil, nil, types.NewError(convErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
+			relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
+			outboundRequest = convertedRequest
 		}
 
-		// apply param override
-		if len(info.ParamOverride) > 0 {
-			jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
-			if err != nil {
-				return newAPIErrorFromParamOverride(err)
+		jsonData, marshalErr := common.Marshal(outboundRequest)
+		if marshalErr != nil {
+			return nil, nil, types.NewError(marshalErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+
+		if !model_setting.GetGlobalSettings().PassThroughRequestEnabled && !info.ChannelSetting.PassThroughBodyEnabled {
+			jsonData, marshalErr = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
+			if marshalErr != nil {
+				return nil, nil, types.NewError(marshalErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
+			if len(info.ParamOverride) > 0 {
+				jsonData, marshalErr = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
+				if marshalErr != nil {
+					return nil, nil, newAPIErrorFromParamOverride(marshalErr)
+				}
 			}
 		}
 
 		logger.LogDebug(c, "requestBody: %s", jsonData)
-		body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		body, closer, bodyErr := relaycommon.NewOutboundJSONBody(jsonData)
+		if bodyErr != nil {
+			return nil, nil, types.NewError(bodyErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
-		defer closer.Close()
-		jsonData = nil
-		requestBody = body
+		return body, func() { _ = closer.Close() }, nil
 	}
 
-	statusCodeMappingStr := c.GetString("status_code_mapping")
-	var httpResp *http.Response
-	resp, err := adaptor.DoRequest(c, info, requestBody)
-	if err != nil {
-		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
-	}
+	for attempt := 0; attempt < 2; attempt++ {
+		requestBody, release, bodyErr := buildRequestBody(attempt > 0)
+		if bodyErr != nil {
+			return bodyErr
+		}
 
-	if resp != nil {
-		httpResp = resp.(*http.Response)
+		resp, doReqErr := adaptor.DoRequest(c, info, requestBody)
+		if release != nil {
+			release()
+		}
+		if doReqErr != nil {
+			return types.NewOpenAIError(doReqErr, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
+		}
+
+		if resp == nil {
+			break
+		}
+		httpResp := resp.(*http.Response)
 		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
 			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
-			// reset status code 重置状态码
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
+			if attempt == 0 {
+				changed := service.FixClaudeRequestOnFirstRetry(request, httpResp.StatusCode, newAPIError.Error())
+				if changed > 0 {
+					logger.LogInfo(c, fmt.Sprintf("retry claude request after self-heal, changed_count=%d", changed))
+					continue
+				}
+			}
 			return newAPIError
 		}
+
+		usage, handleRespErr := adaptor.DoResponse(c, httpResp, info)
+		if handleRespErr != nil {
+			service.ResetStatusCode(handleRespErr, statusCodeMappingStr)
+			return handleRespErr
+		}
+
+		service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
+		return nil
 	}
 
-	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)
-	if newAPIError != nil {
-		// reset status code 重置状态码
-		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
-		return newAPIError
-	}
-
-	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
-	return nil
+	return types.NewErrorWithStatusCode(fmt.Errorf("empty upstream response"), types.ErrorCodeBadResponseStatusCode, http.StatusBadGateway)
 }

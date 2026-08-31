@@ -19,14 +19,21 @@ For commercial licensing, please contact support@quantumnous.com
 import { api } from '@/lib/api'
 
 import type {
+  ChannelDisableMonitorConfig,
+  ChannelDisableMonitorConfigResponse,
   ConfirmPaymentComplianceResponse,
+  DeleteGroupChannelFallbackRequest,
   FetchUpstreamRatiosRequest,
+  GroupChannelFallbackListResponse,
   LogCleanupTask,
   SystemOptionsResponse,
   SystemTaskListResponse,
   SystemTaskResponse,
+  TTFTMonitorConfig,
+  TTFTMonitorConfigResponse,
   UpdateOptionRequest,
   UpdateOptionResponse,
+  UpsertGroupChannelFallbackRequest,
   UpstreamChannelsResponse,
   UpstreamRatiosResponse,
 } from './types'
@@ -102,6 +109,67 @@ export async function fetchUpstreamRatios(request: FetchUpstreamRatiosRequest) {
   const res = await api.post<UpstreamRatiosResponse>(
     '/api/ratio_sync/fetch',
     request
+  )
+  return res.data
+}
+
+export async function getTTFTMonitorConfig() {
+  const res = await api.get<TTFTMonitorConfigResponse>(
+    '/api/monitor/ttft/config'
+  )
+  return res.data
+}
+
+export async function updateTTFTMonitorConfig(request: TTFTMonitorConfig) {
+  const res = await api.put<UpdateOptionResponse>(
+    '/api/monitor/ttft/config',
+    request
+  )
+  return res.data
+}
+
+export async function getChannelDisableMonitorConfig() {
+  const res = await api.get<ChannelDisableMonitorConfigResponse>(
+    '/api/monitor/channel_disable/config'
+  )
+  return res.data
+}
+
+export async function updateChannelDisableMonitorConfig(
+  request: ChannelDisableMonitorConfig
+) {
+  const res = await api.put<UpdateOptionResponse>(
+    '/api/monitor/channel_disable/config',
+    request
+  )
+  return res.data
+}
+
+export async function getGroupChannelFallbacks() {
+  const res = await api.get<GroupChannelFallbackListResponse>(
+    '/api/channel/group_fallback'
+  )
+  return res.data
+}
+
+export async function upsertGroupChannelFallback(
+  request: UpsertGroupChannelFallbackRequest
+) {
+  const res = await api.put<UpdateOptionResponse>(
+    '/api/channel/group_fallback',
+    request
+  )
+  return res.data
+}
+
+export async function deleteGroupChannelFallback(
+  request: DeleteGroupChannelFallbackRequest
+) {
+  const res = await api.delete<UpdateOptionResponse>(
+    '/api/channel/group_fallback',
+    {
+      data: request,
+    }
   )
   return res.data
 }

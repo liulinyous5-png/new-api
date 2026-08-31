@@ -573,4 +573,10 @@ export const STATIC_I18N_KEYS = [
   'This user account is disabled.',
   'Telegram binding failed. Please try again.',
   'Verification scope is missing',
+
+  // Operations: TTFT / channel-disable / group fallback (dynamic titleKey / saveLabel)
+  'TTFT Monitoring',
+  'Channel auto-disable alerts',
+  'Save first-token timeout',
+  'Group fallback',
 ] as const
