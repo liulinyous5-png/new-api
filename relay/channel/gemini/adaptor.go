@@ -7,14 +7,15 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
+	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service/relayconvert"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/reasoning"
+	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -44,15 +45,12 @@ func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayIn
 }
 
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, req *dto.ClaudeRequest) (any, error) {
-	result, err := relayconvert.ConvertRequest(c, info, types.RelayFormatGemini, req)
+	adaptor := openai.Adaptor{}
+	oaiReq, err := adaptor.ConvertClaudeRequest(c, info, req)
 	if err != nil {
 		return nil, err
 	}
-	geminiRequest, ok := result.Value.(*dto.GeminiChatRequest)
-	if !ok {
-		return nil, fmt.Errorf("expected Gemini generateContent request, got %T", result.Value)
-	}
-	return geminiRequest, nil
+	return a.ConvertOpenAIRequest(c, info, oaiReq.(*dto.GeneralOpenAIRequest))
 }
 
 func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
@@ -183,11 +181,13 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	if request == nil {
 		return nil, errors.New("request is nil")
 	}
-	result, err := relayconvert.ConvertRequest(c, info, types.RelayFormatGemini, request)
+
+	geminiRequest, err := CovertOpenAI2Gemini(c, *request, info)
 	if err != nil {
 		return nil, err
 	}
-	return result.Value, nil
+
+	return geminiRequest, nil
 }
 
 func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dto.RerankRequest) (any, error) {
@@ -239,15 +239,17 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	result, err := relayconvert.ConvertRequest(c, info, types.RelayFormatGemini, &request)
+	request, err := preprocessGeminiOpenAIResponsesRequest(request)
 	if err != nil {
 		return nil, err
 	}
-	geminiRequest, ok := result.Value.(*dto.GeminiChatRequest)
-	if !ok {
-		return nil, fmt.Errorf("expected Gemini generateContent request, got %T", result.Value)
+
+	chatRequest, err := relayconvert.ResponsesRequestToChatCompletionsRequest(&request)
+	if err != nil {
+		return nil, err
 	}
-	return geminiRequest, nil
+
+	return a.ConvertOpenAIRequest(c, info, chatRequest)
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {

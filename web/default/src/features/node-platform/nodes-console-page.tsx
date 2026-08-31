@@ -1,0 +1,1576 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+import {
+  Ban,
+  Cpu,
+  Download,
+  ExternalLink,
+  History,
+  Pencil,
+  Settings2,
+  Trash2,
+} from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
+
+import { SectionPageLayout } from '@/components/layout'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { api } from '@/lib/api'
+
+import {
+  createCapabilityTest,
+  deleteDevice,
+  deleteNode,
+  enableCapability,
+  getLatestPluginRelease,
+  getMyProviderGroup,
+  listAvailableScriptVersions,
+  listBalanceChecks,
+  listCategories,
+  listMyConsoleRows,
+  listMyNodesByIds,
+  listMyTaskAttempts,
+  listNodeCapabilities,
+  listProviderCapabilityStats,
+  PLUGIN_DOWNLOAD_URL,
+  removeCapability,
+  requestBalanceCheck,
+  revokeDevice,
+  setNodeEnabled,
+  updateDeviceNickname,
+  type NodeBalanceCheck,
+  type PluginRelease,
+  type ProviderGroup,
+  type ScriptCategory,
+} from './api'
+import { EarningsSummary } from './earnings-summary'
+import { formatUnix, microsToCurrency } from './lib/format'
+import type {
+  CapabilityStat,
+  ConsoleRow,
+  Device,
+  NodeCapability,
+  NodeInfo,
+  ProviderTaskAttempt,
+  ScriptVersion,
+} from './types'
+
+type PublishedScript = {
+  id: number
+  title: string
+  category_id?: number
+}
+
+type EnableFormValue = {
+  scriptId: string
+  version: string
+  priceMultiplier: string // 0.5–10, default "1.0"
+  dailyLimit: string
+}
+type NodesConsoleDraft = {
+  enableFormDefaultsVersion: number
+  hideInactive: boolean
+  enableForm: Record<string, EnableFormValue>
+  pageSize: number
+}
+
+const DEFAULT_ENABLE_FORM: EnableFormValue = {
+  scriptId: '',
+  version: '1',
+  priceMultiplier: '1.0',
+  dailyLimit: '100',
+}
+
+const ENABLE_FORM_DEFAULTS_VERSION = 1
+const NODE_REFRESH_INTERVAL_MS = 15_000
+const NODE_REFRESH_RATE_LIMIT_BACKOFF_MS = 60_000
+// A provider may run hundreds of devices. The list is paged server-side (the
+// console endpoint returns one page of device+node rows), so we only ever fetch
+// and poll the rows on the current page — no per-node fan-out for off-screen
+// rows, which is what used to trigger 429s on revoke/delete.
+const PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
+const DEFAULT_PAGE_SIZE = 20
+
+function getDraftStorageKey() {
+  const userId = window.localStorage.getItem('uid') ?? 'anonymous'
+  return `nodes-console-draft:${userId}`
+}
+
+function loadNodesConsoleDraft(): NodesConsoleDraft {
+  try {
+    const saved = JSON.parse(
+      window.localStorage.getItem(getDraftStorageKey()) ?? '{}'
+    ) as Partial<NodesConsoleDraft>
+    const usesCurrentDefaults =
+      saved.enableFormDefaultsVersion === ENABLE_FORM_DEFAULTS_VERSION
+    const enableForm = Object.fromEntries(
+      Object.entries(saved.enableForm ?? {}).flatMap(([nodeId, value]) => {
+        if (!value || typeof value !== 'object') return []
+        const form = value as Partial<EnableFormValue>
+        let priceMultiplier =
+          (form as any).priceMultiplier || DEFAULT_ENABLE_FORM.priceMultiplier
+        let dailyLimit = form.dailyLimit || DEFAULT_ENABLE_FORM.dailyLimit
+        if (usesCurrentDefaults) {
+          if (typeof (form as any).priceMultiplier === 'string') {
+            priceMultiplier = (form as any).priceMultiplier
+          }
+          if (typeof form.dailyLimit === 'string') dailyLimit = form.dailyLimit
+        } else if (form.dailyLimit === '0') {
+          dailyLimit = DEFAULT_ENABLE_FORM.dailyLimit
+        }
+        return [
+          [
+            nodeId,
+            {
+              scriptId: typeof form.scriptId === 'string' ? form.scriptId : '',
+              version: typeof form.version === 'string' ? form.version : '',
+              priceMultiplier,
+              dailyLimit,
+            },
+          ] as const,
+        ]
+      })
+    ) as Record<string, EnableFormValue>
+    return {
+      enableFormDefaultsVersion: ENABLE_FORM_DEFAULTS_VERSION,
+      hideInactive:
+        typeof saved.hideInactive === 'boolean' ? saved.hideInactive : true,
+      enableForm,
+      pageSize: PAGE_SIZE_OPTIONS.includes(saved.pageSize as number)
+        ? (saved.pageSize as number)
+        : DEFAULT_PAGE_SIZE,
+    }
+  } catch {
+    return {
+      enableFormDefaultsVersion: ENABLE_FORM_DEFAULTS_VERSION,
+      hideInactive: true,
+      enableForm: {},
+      pageSize: DEFAULT_PAGE_SIZE,
+    }
+  }
+}
+
+function nodeOnline(n: NodeInfo): boolean {
+  return (
+    n.state !== 'OFFLINE' &&
+    n.last_seen_at >= Math.floor(Date.now() / 1000) - 45
+  )
+}
+
+export function NodesConsolePage() {
+  const { t } = useTranslation()
+  const [initialDraft] = useState(loadNodesConsoleDraft)
+  // One page of console rows (a device + its nodes; device=null for device-less
+  // nodes) and the total row count, both from the server. Paging is server-side
+  // so we never hold more than one page — nor fan out per-node requests for
+  // off-page rows.
+  const [rows, setRows] = useState<ConsoleRow[]>([])
+  const [total, setTotal] = useState(0)
+  const [caps, setCaps] = useState<Record<string, NodeCapability[]>>({})
+  const [loading, setLoading] = useState(false)
+  // True until the first console page resolves, to distinguish "loading" from
+  // "genuinely empty" in the table's empty state.
+  const [initialLoaded, setInitialLoaded] = useState(false)
+  // A user may register dozens/hundreds of devices; hide revoked/offline by
+  // default to keep the list readable.
+  const [hideInactive, setHideInactive] = useState(initialDraft.hideInactive)
+  // Published scripts to pick from when listing a capability.
+  const [pubScripts, setPubScripts] = useState<PublishedScript[]>([])
+  const [scriptVersions, setScriptVersions] = useState<
+    Record<number, ScriptVersion[]>
+  >({})
+  const [categories, setCategories] = useState<ScriptCategory[]>([])
+  const [balanceChecks, setBalanceChecks] = useState<
+    Record<string, NodeBalanceCheck[]>
+  >({})
+  const [checking, setChecking] = useState('')
+  // Node id currently being toggled on/off, to disable its switch mid-flight.
+  const [togglingNodeId, setTogglingNodeId] = useState('')
+  // Per-(node, script, version) execution stats, keyed "nodeId:scriptId:version".
+  const [capStats, setCapStats] = useState<Record<string, CapabilityStat>>({})
+  // Bumped on each loadAll() so the provider earnings cards refetch.
+  const [refreshTick, setRefreshTick] = useState(0)
+  // Per-node enable form: script id + version + price + quota.
+  const [enableForm, setEnableForm] = useState<Record<string, EnableFormValue>>(
+    initialDraft.enableForm
+  )
+  const [capabilityNodeId, setCapabilityNodeId] = useState<string | null>(null)
+  // Server-side paging: page is 1-based; the server clamps page_size to 100.
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(initialDraft.pageSize)
+  // Nodes whose capability fetch is in flight, so repeated dialog opens (or a
+  // refresh landing on the same node) don't stack duplicate requests against
+  // /capabilities + /balance-checks and trip the rate limiter.
+  const capsInFlight = useRef(new Set<string>())
+  // Node ids currently on the page, kept in a ref so the polling interval's
+  // closure always sees the latest set without re-subscribing every render.
+  const pageNodeIdsRef = useRef<string[]>([])
+  // The caller's provider group (all their nodes belong to it). Created on first
+  // load from the username; every node defaults into this group.
+  const [providerGroup, setProviderGroup] = useState<ProviderGroup | null>(null)
+  // Per-node execution records (task attempts), shown in a dialog so the console
+  // stays uncluttered. Params/results are E2EE and not stored server-side; this
+  // is the most the control plane can show for debugging.
+  const [recordsOpen, setRecordsOpen] = useState(false)
+  const [taskAttempts, setTaskAttempts] = useState<ProviderTaskAttempt[]>([])
+  const [attemptsLoading, setAttemptsLoading] = useState(false)
+  // Latest published extension release, if any. Backs the "Download plugin"
+  // button so it only appears once the operator has uploaded a release.
+  const [pluginRelease, setPluginRelease] = useState<PluginRelease | null>(null)
+  const [pluginDialogOpen, setPluginDialogOpen] = useState(false)
+  // Inline nickname editing: the device ID being edited (null = none) and the
+  // current input value. The nickname itself lives on device.nickname (backend).
+  const [editingNicknameId, setEditingNicknameId] = useState<string | null>(
+    null
+  )
+  const [nicknameInput, setNicknameInput] = useState('')
+  // The device ID whose nickname save is in flight, to disable its input.
+  const [savingNicknameId, setSavingNicknameId] = useState('')
+
+  useEffect(() => {
+    getLatestPluginRelease()
+      .then((release) => {
+        if (release.available) setPluginRelease(release)
+      })
+      .catch(() => {})
+  }, [])
+
+  async function saveNickname(deviceId: string, value: string) {
+    const trimmed = value.trim()
+    setEditingNicknameId(null)
+    setSavingNicknameId(deviceId)
+    try {
+      await updateDeviceNickname(deviceId, trimmed)
+      // Optimistically update the row's device so the UI reflects the new
+      // nickname immediately without a full reload.
+      setRows((prev) =>
+        prev.map((row) =>
+          row.device?.id === deviceId
+            ? { ...row, device: { ...row.device, nickname: trimmed } }
+            : row
+        )
+      )
+    } catch (e) {
+      toast.error(String((e as Error).message))
+    } finally {
+      setSavingNicknameId('')
+    }
+  }
+
+  async function loadTaskAttempts() {
+    setAttemptsLoading(true)
+    try {
+      const list = await listMyTaskAttempts()
+      setTaskAttempts(Array.isArray(list) ? list : [])
+    } catch (e) {
+      toast.error(String((e as Error).message))
+    } finally {
+      setAttemptsLoading(false)
+    }
+  }
+
+  function openTaskRecords() {
+    setRecordsOpen(true)
+    void loadTaskAttempts()
+  }
+
+  // Flat view of the current page's nodes (each row's nodes concatenated), for
+  // node lookups by id (dialog, toggle, polling merge). A device with no nodes
+  // can serialize as null (Go nil slice), so guard against a null row.nodes.
+  const pageNodes = rows.flatMap((row) => row.nodes ?? [])
+  pageNodeIdsRef.current = pageNodes.map((n) => n.id)
+  const pageCount = Math.max(1, Math.ceil(total / pageSize))
+  const pageStart = (page - 1) * pageSize
+
+  // dropNodeState drops one node's per-node caches (on delete) so it can't leak
+  // stale rows. Caps/checks for other nodes are kept — they're only ever loaded
+  // on demand, so the maps stay bounded by how many nodes the user inspects.
+  function dropNodeState(nodeId: string) {
+    const without = <T,>(map: Record<string, T>) => {
+      if (!(nodeId in map)) return map
+      const next = { ...map }
+      delete next[nodeId]
+      return next
+    }
+    setCaps(without)
+    setBalanceChecks(without)
+    setEnableForm(without)
+  }
+
+  // updateNodeInRows applies a partial patch to one node across the current page
+  // (used for optimistic enable toggles and the by-ids poll merge).
+  function updateNodeInRows(nodeId: string, patch: Partial<NodeInfo>) {
+    setRows((current) =>
+      current.map((row) => {
+        if (!row.nodes.some((n) => n.id === nodeId)) return row
+        return {
+          ...row,
+          nodes: row.nodes.map((n) =>
+            n.id === nodeId ? { ...n, ...patch } : n
+          ),
+        }
+      })
+    )
+  }
+
+  // loadStatics fetches the data that is independent of which page is shown:
+  // published scripts, categories, capability stats, and the provider group. It
+  // runs once on mount and again on an explicit Refresh.
+  async function loadStatics() {
+    try {
+      const [sq, categoryList, stats] = await Promise.all([
+        api.get('/api/scripts/square', { params: { limit: 200 } }),
+        listCategories(),
+        listProviderCapabilityStats().catch(() => [] as CapabilityStat[]),
+      ])
+      const safeCategoryList = Array.isArray(categoryList) ? categoryList : []
+      const statList = Array.isArray(stats) ? stats : []
+      getMyProviderGroup()
+        .then(setProviderGroup)
+        .catch(() => {})
+      const items = (sq.data?.data?.items ??
+        sq.data?.items ??
+        sq.data?.data ??
+        []) as PublishedScript[]
+      const balanceScriptIds = new Set(
+        safeCategoryList
+          .map((category) => category.balance_script_id)
+          .filter(Boolean)
+      )
+      const listableItems = (Array.isArray(items) ? items : []).filter(
+        (script) => !balanceScriptIds.has(script.id)
+      )
+      setPubScripts(listableItems)
+      setCategories(safeCategoryList)
+      setCapStats(
+        Object.fromEntries(
+          statList.map((s) => [`${s.node_id}:${s.script_id}:${s.version}`, s])
+        )
+      )
+      setRefreshTick((tick) => tick + 1)
+    } catch (e) {
+      toast.error(String((e as Error).message))
+    }
+  }
+
+  // loadConsolePage fetches one page of console rows for the current
+  // page/pageSize/hideInactive. Server-side paging means at most pageSize rows
+  // (and their nodes) come back, so revoke/delete/refresh cost one request, not
+  // a per-node fan-out. Returns the total so callers can correct an overshot
+  // page after a deletion.
+  async function loadConsolePage(targetPage = page): Promise<number> {
+    setLoading(true)
+    try {
+      const result = await listMyConsoleRows({
+        page: targetPage,
+        pageSize,
+        activeOnly: hideInactive,
+      })
+      // Normalize at the entry point: a device with no nodes can arrive as
+      // { nodes: null } (Go nil slice), and every downstream consumer assumes
+      // row.nodes is an array. Guarantee that here so nothing else has to.
+      const pageRows: ConsoleRow[] = (
+        Array.isArray(result?.items) ? result.items : []
+      ).map((row) => ({ ...row, nodes: row.nodes ?? [] }))
+      const pageTotal = result?.total ?? 0
+      setRows(pageRows)
+      setTotal(pageTotal)
+      // Close the capabilities dialog if its node fell off this page.
+      const pageNodeIds = new Set(
+        pageRows.flatMap((row) => row.nodes.map((n) => n.id))
+      )
+      setCapabilityNodeId((current) =>
+        current && !pageNodeIds.has(current) ? null : current
+      )
+      return pageTotal
+    } catch (e) {
+      toast.error(String((e as Error).message))
+      return total
+    } finally {
+      setLoading(false)
+      setInitialLoaded(true)
+    }
+  }
+
+  // refreshCurrentPage reloads the current page and, if a deletion emptied the
+  // last page, steps back to the previous one.
+  async function refreshCurrentPage() {
+    const pageTotal = await loadConsolePage(page)
+    const lastPage = Math.max(1, Math.ceil(pageTotal / pageSize))
+    if (page > lastPage) setPage(lastPage)
+  }
+
+  // Enable a capability: run the challenge test to get a window, then list the
+  // script version on the node with the provider's price and daily quota.
+  async function onEnableCapability(nodeId: string) {
+    // Listing a new, unverified capability while the node is enabled risks it
+    // being scheduled a task it can't run. Require the node to be disabled first
+    // so every new capability goes through its balance check before scheduling.
+    const node = pageNodes.find((n) => n.id === nodeId)
+    if (node?.enabled) {
+      toast.error(t('Disable the node before listing a new script'))
+      return
+    }
+    const f = enableForm[nodeId]
+    if (!f || !f.scriptId || !f.version) {
+      toast.error(t('Select a script and version'))
+      return
+    }
+    const scriptId = Number(f.scriptId)
+    const version = Number(f.version)
+    // Listing is unconditional now: the provider lists the script first, runs
+    // the per-capability balance check from the listed row, then enables the
+    // node once all its capabilities pass.
+    try {
+      const test = await createCapabilityTest(nodeId, scriptId, version)
+      const multiplier = Math.min(
+        10,
+        Math.max(0.5, Number(f.priceMultiplier || '1'))
+      )
+      await enableCapability(nodeId, scriptId, {
+        version,
+        price_multiplier: Number.isFinite(multiplier) ? multiplier : 1.0,
+        daily_limit: Number(f.dailyLimit || '0'),
+        test_expires_at: test.test_expires_at,
+      })
+      toast.success(t('Capability listed'))
+      await loadCaps(nodeId)
+    } catch (e) {
+      toast.error(String((e as Error).message))
+    }
+  }
+
+  function setForm(nodeId: string, patch: Partial<EnableFormValue>) {
+    setEnableForm((p) => {
+      const current = p[nodeId] ?? DEFAULT_ENABLE_FORM
+      return { ...p, [nodeId]: { ...current, ...patch } }
+    })
+  }
+
+  async function selectScript(nodeId: string, value: string) {
+    if (!value) {
+      setForm(nodeId, { scriptId: '', version: '' })
+      return
+    }
+    const scriptId = Number(value)
+    try {
+      const loadedVersions =
+        scriptVersions[scriptId] ||
+        (await listAvailableScriptVersions(scriptId))
+      const versions = (
+        Array.isArray(loadedVersions) ? loadedVersions : []
+      ).filter(
+        (item) =>
+          !categories.some(
+            (category) =>
+              category.balance_script_id === item.script_id &&
+              category.balance_script_version === item.version
+          )
+      )
+      setScriptVersions((current) => ({ ...current, [scriptId]: versions }))
+      setForm(nodeId, {
+        scriptId: value,
+        version: versions[0] ? String(versions[0].version) : '',
+      })
+    } catch (e) {
+      toast.error(String((e as Error).message))
+    }
+  }
+
+  // Static data loads once on mount.
+  useEffect(() => {
+    void loadStatics()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // (Re)fetch the console page whenever the page, page size, or the
+  // revoked/offline filter changes. This is the single source of page data.
+  useEffect(() => {
+    void loadConsolePage(page)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, pageSize, hideInactive])
+
+  // Filter/page-size changes restart paging from the first page.
+  useEffect(() => {
+    setPage(1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hideInactive, pageSize])
+
+  useEffect(() => {
+    let timer: number | undefined
+    let stopped = false
+    let refreshing = false
+
+    const scheduleRefresh = (delay: number) => {
+      if (stopped) return
+      if (timer !== undefined) window.clearTimeout(timer)
+      timer = window.setTimeout(refreshNodes, delay)
+    }
+
+    const refreshNodes = async () => {
+      timer = undefined
+      if (stopped || refreshing || document.visibilityState !== 'visible') {
+        return
+      }
+
+      // Poll only the nodes on the current page, not every node the provider
+      // owns. This is the fix for the 429 storm: a 500-node provider polls at
+      // most pageSize ids per tick instead of the whole fleet.
+      const ids = pageNodeIdsRef.current
+      if (ids.length === 0) {
+        scheduleRefresh(NODE_REFRESH_INTERVAL_MS)
+        return
+      }
+
+      refreshing = true
+      let nextRefresh = NODE_REFRESH_INTERVAL_MS
+      try {
+        const list = await listMyNodesByIds(ids, { skipErrorHandler: true })
+        if (!stopped && Array.isArray(list)) {
+          // Merge fresh node state into the page rows in place; layout (which
+          // device owns which node) is unchanged between polls.
+          const byId = new Map(list.map((n) => [n.id, n]))
+          setRows((current) =>
+            current.map((row) => ({
+              ...row,
+              nodes: row.nodes.map((n) => byId.get(n.id) ?? n),
+            }))
+          )
+        }
+      } catch (error) {
+        const status = (error as { response?: { status?: number } }).response
+          ?.status
+        if (status === 429) nextRefresh = NODE_REFRESH_RATE_LIMIT_BACKOFF_MS
+      } finally {
+        refreshing = false
+        scheduleRefresh(nextRefresh)
+      }
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && !refreshing) {
+        scheduleRefresh(0)
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    scheduleRefresh(NODE_REFRESH_INTERVAL_MS)
+    return () => {
+      stopped = true
+      if (timer !== undefined) window.clearTimeout(timer)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        getDraftStorageKey(),
+        JSON.stringify({
+          enableFormDefaultsVersion: ENABLE_FORM_DEFAULTS_VERSION,
+          hideInactive,
+          enableForm,
+          pageSize,
+        } satisfies NodesConsoleDraft)
+      )
+    } catch {
+      // Storage may be unavailable or full; the console remains usable without persistence.
+    }
+  }, [hideInactive, enableForm, pageSize])
+
+  async function onRevokeDevice(id: string) {
+    // Revoking is irreversible: it kills the device's tokens, takes its node
+    // offline, and the browser must re-register as a NEW device. Confirm first.
+    if (
+      !window.confirm(
+        t(
+          'Revoke device {{id}}? This is irreversible — its tokens are invalidated and its node goes offline. The browser must re-register as a new device.',
+          { id }
+        )
+      )
+    ) {
+      return
+    }
+    try {
+      await revokeDevice(id)
+      toast.success(t('Device revoked'))
+      await refreshCurrentPage()
+    } catch (e) {
+      toast.error(String((e as Error).message))
+    }
+  }
+
+  async function onDeleteDevice(id: string) {
+    if (
+      !window.confirm(
+        t('Permanently delete revoked device {{id}} and its nodes?', { id })
+      )
+    ) {
+      return
+    }
+    try {
+      await deleteDevice(id)
+      toast.success(t('Device deleted'))
+      await refreshCurrentPage()
+    } catch (e) {
+      toast.error(String((e as Error).message))
+    }
+  }
+
+  async function onDeleteNode(id: string) {
+    if (!window.confirm(t('Permanently delete offline node {{id}}?', { id }))) {
+      return
+    }
+    try {
+      await deleteNode(id)
+      toast.success(t('Node deleted'))
+      if (capabilityNodeId === id) setCapabilityNodeId(null)
+      dropNodeState(id)
+      await refreshCurrentPage()
+    } catch (e) {
+      toast.error(String((e as Error).message))
+    }
+  }
+
+  // loadCaps fetches one node's capabilities and balance checks. Concurrent
+  // calls for the same node collapse into the first one — the dialog can be
+  // reopened rapidly and every duplicate would cost two requests.
+  async function loadCaps(nodeId: string) {
+    if (capsInFlight.current.has(nodeId)) return
+    capsInFlight.current.add(nodeId)
+    try {
+      const [list, checks] = await Promise.all([
+        listNodeCapabilities(nodeId),
+        listBalanceChecks(nodeId),
+      ])
+      setCaps((p) => ({ ...p, [nodeId]: Array.isArray(list) ? list : [] }))
+      setBalanceChecks((current) => ({
+        ...current,
+        [nodeId]: Array.isArray(checks) ? checks : [],
+      }))
+    } catch (e) {
+      toast.error(String((e as Error).message))
+    } finally {
+      capsInFlight.current.delete(nodeId)
+    }
+  }
+
+  function toggleNodeCapabilities(nodeId: string) {
+    setCapabilityNodeId(nodeId)
+    // Already loaded once this session: show the cached rows immediately and
+    // let the user hit the dialog's own refresh if they want newer data.
+    if (!caps[nodeId]) void loadCaps(nodeId)
+  }
+
+  async function onBalanceCheck(nodeId: string, categoryId: number) {
+    const key = `${nodeId}:${categoryId}`
+    const previousCheckedAt =
+      (balanceChecks[nodeId] || []).find(
+        (item) => item.category_id === categoryId
+      )?.checked_at ?? 0
+    setChecking(key)
+    try {
+      await requestBalanceCheck(nodeId, categoryId)
+      toast.success(t('Balance check sent to the provider plugin'))
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1500))
+        const checks = await listBalanceChecks(nodeId)
+        const checkList = Array.isArray(checks) ? checks : []
+        setBalanceChecks((current) => ({ ...current, [nodeId]: checkList }))
+        const result = checkList.find((item) => item.category_id === categoryId)
+        if (result && result.checked_at > previousCheckedAt) {
+          if (result.balance_ok) {
+            toast.success(t('Balance check passed'))
+          } else {
+            toast.error(result.error_message || t('Balance check failed'))
+          }
+          return
+        }
+      }
+      toast.error(t('Balance check timed out'))
+    } catch (e) {
+      toast.error(String((e as Error).message))
+    } finally {
+      setChecking('')
+    }
+  }
+
+  // capabilityBalanceOk reports whether a capability's category balance check is
+  // passing and unexpired. Capabilities with no category (category_id 0) need no
+  // check and are always OK.
+  function capabilityBalanceOk(nodeId: string, categoryId: number): boolean {
+    if (!categoryId) return true
+    const status = (balanceChecks[nodeId] || []).find(
+      (item) => item.category_id === categoryId
+    )
+    // No expiry: a passed check stays valid until the node is explicitly
+    // rechecked. If the node is broken at execution time the order will fail,
+    // which is the only signal we need (periodic re-checks are too burdensome
+    // at scale).
+    return Boolean(status?.balance_ok)
+  }
+
+  // nodeCanEnable reports whether every active capability on the node has a
+  // passing balance check (and there is at least one), mirroring the server-side
+  // gate so the switch is only offered when enabling would succeed.
+  function nodeCanEnable(nodeId: string): boolean {
+    const list = (caps[nodeId] ?? []).filter((c) => c.status === 'active')
+    if (list.length === 0) return false
+    return list.every((c) => capabilityBalanceOk(nodeId, c.category_id))
+  }
+
+  function nodeToggleTitle(node: NodeInfo, capabilitiesLoaded: boolean) {
+    if (node.enabled) return t('Enabled: this node can be scheduled')
+    if (!capabilitiesLoaded) {
+      return t('Open capabilities and pass every balance check to enable')
+    }
+    if (!nodeCanEnable(node.id)) {
+      return t(
+        'All listed capabilities must pass their balance check before enabling'
+      )
+    }
+    return t('Enable this node for scheduling')
+  }
+
+  async function onToggleEnabled(node: NodeInfo, next: boolean) {
+    setTogglingNodeId(node.id)
+    try {
+      await setNodeEnabled(node.id, next)
+      updateNodeInRows(node.id, { enabled: next })
+      toast.success(next ? t('Node enabled') : t('Node disabled'))
+    } catch (e) {
+      toast.error(String((e as Error).message))
+    } finally {
+      setTogglingNodeId('')
+    }
+  }
+
+  async function onRemove(nodeId: string, scriptId: number, version: number) {
+    if (
+      !window.confirm(
+        t('Unlist script #{{scriptId}} v{{version}} from this node?', {
+          scriptId,
+          version,
+        })
+      )
+    ) {
+      return
+    }
+    try {
+      await removeCapability(nodeId, scriptId, version)
+      toast.success(t('Capability unlisted'))
+      await loadCaps(nodeId)
+    } catch (e) {
+      toast.error(String((e as Error).message))
+    }
+  }
+
+  function renderCapabilities(node: NodeInfo) {
+    const list = caps[node.id] ?? []
+    // New capabilities are unverified until their balance check passes, and an
+    // enabled node can be scheduled at any moment. Only allow listing while the
+    // node is disabled so a bad capability can't get a task before it's checked.
+    const listingLocked = node.enabled
+    return (
+      <div className='space-y-5'>
+        <section>
+          <div className='mb-3'>
+            <h4 className='text-sm font-medium'>{t('List capability')}</h4>
+            <p className='text-muted-foreground text-xs'>
+              {listingLocked
+                ? t(
+                    'Disable the node before listing a new script — new capabilities must pass their balance check before the node can be scheduled again'
+                  )
+                : t(
+                    'List the script first, then run its balance check from the row below'
+                  )}
+            </p>
+          </div>
+          <div className='bg-background grid gap-3 rounded-md border p-3 sm:grid-cols-2 xl:grid-cols-[minmax(220px,2fr)_100px_130px_130px_auto]'>
+            <label className='text-muted-foreground space-y-1 text-xs'>
+              {t('Script')}
+              <select
+                className='text-foreground h-9 w-full rounded-md border bg-transparent px-2 text-sm disabled:opacity-50'
+                disabled={listingLocked}
+                value={enableForm[node.id]?.scriptId || ''}
+                onChange={(e) => selectScript(node.id, e.target.value)}
+              >
+                <option value=''>{t('Select a script')}</option>
+                {pubScripts.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    #{s.id} {s.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className='text-muted-foreground space-y-1 text-xs'>
+              {t('Version')}
+              <select
+                className='text-foreground h-9 w-full rounded-md border bg-transparent px-2 text-sm disabled:opacity-50'
+                disabled={listingLocked || !enableForm[node.id]?.scriptId}
+                value={enableForm[node.id]?.version || ''}
+                onChange={(e) => setForm(node.id, { version: e.target.value })}
+              >
+                <option value=''>{t('Version')}</option>
+                {(
+                  scriptVersions[Number(enableForm[node.id]?.scriptId)] || []
+                ).map((version) => (
+                  <option key={version.id} value={version.version}>
+                    v{version.version}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className='text-muted-foreground space-y-1 text-xs'>
+              {t('Price Multiplier')}
+              <Input
+                type='number'
+                min={0.5}
+                max={10}
+                step={0.1}
+                disabled={listingLocked}
+                value={
+                  enableForm[node.id]?.priceMultiplier ??
+                  DEFAULT_ENABLE_FORM.priceMultiplier
+                }
+                onChange={(e) =>
+                  setForm(node.id, { priceMultiplier: e.target.value })
+                }
+              />
+              <span className='text-[10px] opacity-60'>
+                {t('0.5× – 10×, default 1.0')}
+              </span>
+            </label>
+            <label className='text-muted-foreground space-y-1 text-xs'>
+              {t('Daily limit')}
+              <Input
+                disabled={listingLocked}
+                value={
+                  enableForm[node.id]?.dailyLimit ??
+                  DEFAULT_ENABLE_FORM.dailyLimit
+                }
+                onChange={(e) =>
+                  setForm(node.id, { dailyLimit: e.target.value })
+                }
+              />
+            </label>
+            <Button
+              className='self-end'
+              disabled={listingLocked}
+              onClick={() => onEnableCapability(node.id)}
+            >
+              {t('List capability')}
+            </Button>
+          </div>
+        </section>
+
+        <section>
+          <div className='mb-3 flex items-center justify-between'>
+            <h4 className='text-sm font-medium'>{t('Listed capabilities')}</h4>
+            <Badge variant='secondary'>{list.length}</Badge>
+          </div>
+          <div className='bg-background overflow-x-auto rounded-md border'>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t('Script')}</TableHead>
+                  <TableHead>{t('Version')}</TableHead>
+                  <TableHead>{t('Concurrency')}</TableHead>
+                  <TableHead>{t('Multiplier')}</TableHead>
+                  <TableHead>{t('Balance')}</TableHead>
+                  <TableHead>{t('Today')}</TableHead>
+                  <TableHead>{t('Success rate')}</TableHead>
+                  <TableHead>{t('Revenue')}</TableHead>
+                  <TableHead>{t('Balance check')}</TableHead>
+                  <TableHead>{t('Status')}</TableHead>
+                  <TableHead className='text-right'>{t('Actions')}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {list.map((c) => {
+                  const stat =
+                    capStats[`${node.id}:${c.script_id}:${c.version}`]
+                  const title = pubScripts.find(
+                    (script) => script.id === c.script_id
+                  )?.title
+                  const rate =
+                    stat && stat.executions > 0
+                      ? `${Math.round((stat.successes / stat.executions) * 100)}% (${stat.successes}/${stat.executions})`
+                      : '-'
+                  const daily =
+                    c.daily_limit > 0
+                      ? `${c.daily_used ?? 0}/${c.daily_limit}`
+                      : `${c.daily_used ?? 0}/∞`
+                  // Per-capability balance check: probes the script's category.
+                  // Capabilities with no category need no check.
+                  const checkStatus = (balanceChecks[node.id] || []).find(
+                    (item) => item.category_id === c.category_id
+                  )
+                  const hasCheckedBalance = (checkStatus?.checked_at ?? 0) > 0
+                  const balanceDisplay =
+                    checkStatus && hasCheckedBalance
+                      ? checkStatus.balance_micros
+                      : c.remaining_quota
+                  const checkValid = capabilityBalanceOk(node.id, c.category_id)
+                  const checkKey = `${node.id}:${c.category_id}`
+                  let checkClassName = 'text-muted-foreground'
+                  let checkLabel = t('Not checked')
+                  if (checkValid) {
+                    checkClassName = 'text-emerald-600'
+                    checkLabel = t('Passed')
+                  } else if (checkStatus && !checkStatus.balance_ok) {
+                    checkClassName = 'text-red-600'
+                    checkLabel = t('Failed')
+                  }
+                  return (
+                    <TableRow key={c.id}>
+                      <TableCell className='min-w-48'>
+                        #{c.script_id}
+                        {title ? ` ${title}` : ''}
+                      </TableCell>
+                      <TableCell>v{c.version}</TableCell>
+                      <TableCell>{c.concurrency ?? 1}</TableCell>
+                      <TableCell>
+                        {c.price_multiplier ?? 1.0}×
+                        {c.min_interval_seconds > 0 && (
+                          <div className='text-muted-foreground text-[10px]'>
+                            {t('interval')}: {c.min_interval_seconds}s
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell
+                        title={t(
+                          hasCheckedBalance
+                            ? 'Balance from last balance check'
+                            : 'Balance from last execution result'
+                        )}
+                      >
+                        {balanceDisplay}
+                      </TableCell>
+                      <TableCell>{daily}</TableCell>
+                      <TableCell>{rate}</TableCell>
+                      <TableCell>
+                        {microsToCurrency(stat?.revenue_micros)}
+                      </TableCell>
+                      <TableCell>
+                        {c.category_id ? (
+                          <div className='flex items-center gap-2'>
+                            <Button
+                              size='sm'
+                              variant='outline'
+                              disabled={checking === checkKey}
+                              onClick={() =>
+                                onBalanceCheck(node.id, c.category_id)
+                              }
+                            >
+                              {checking === checkKey
+                                ? t('Checking...')
+                                : t('Detect')}
+                            </Button>
+                            <span
+                              className={`text-xs ${checkClassName}`}
+                              title={
+                                !checkValid
+                                  ? checkStatus?.error_message
+                                  : undefined
+                              }
+                            >
+                              {checkLabel}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className='text-muted-foreground text-xs'>
+                            {t('N/A')}
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant='outline'>{c.status}</Badge>
+                      </TableCell>
+                      <TableCell className='text-right'>
+                        <Button
+                          size='icon-sm'
+                          variant='ghost'
+                          title={t('Unlist')}
+                          onClick={() =>
+                            onRemove(node.id, c.script_id, c.version)
+                          }
+                        >
+                          <Trash2 className='text-destructive size-4' />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+                {list.length === 0 && (
+                  <TableRow>
+                    <TableCell
+                      colSpan={11}
+                      className='text-muted-foreground h-20 text-center'
+                    >
+                      {t('No capabilities')}
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </section>
+      </div>
+    )
+  }
+
+  function renderDeviceRow(device: Device, deviceNodes: NodeInfo[]) {
+    const node = deviceNodes[0]
+    // Capabilities are fetched only when the node dialog is opened, so this
+    // is false until the provider looks at the node.
+    const capabilitiesLoaded = node ? Boolean(caps[node.id]) : false
+    return (
+      <div
+        key={device.id}
+        className='hover:bg-muted/20 flex min-h-14 flex-col gap-2 border-b px-3 py-2 last:border-b-0 lg:flex-row lg:items-center lg:gap-4'
+      >
+        <div className='flex min-w-0 flex-1 items-center gap-2.5'>
+          <Cpu className='text-muted-foreground size-4 shrink-0' />
+          <div className='min-w-0 flex-1 lg:max-w-72'>
+            <div className='flex min-w-0 items-center gap-2'>
+              {editingNicknameId === device.id ? (
+                <Input
+                  autoFocus
+                  className='h-6 w-40 px-1.5 py-0 text-sm'
+                  value={nicknameInput}
+                  maxLength={40}
+                  disabled={savingNicknameId === device.id}
+                  placeholder={device.name || t('Unnamed device')}
+                  onChange={(e) => setNicknameInput(e.target.value)}
+                  onBlur={() => saveNickname(device.id, nicknameInput)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      saveNickname(device.id, nicknameInput)
+                    } else if (e.key === 'Escape') {
+                      setEditingNicknameId(null)
+                    }
+                  }}
+                />
+              ) : (
+                <>
+                  <h3
+                    className='truncate text-sm font-medium'
+                    title={
+                      device.nickname ? device.name || undefined : undefined
+                    }
+                  >
+                    {device.nickname || device.name || t('Unnamed device')}
+                  </h3>
+                  <button
+                    type='button'
+                    className='text-muted-foreground hover:text-foreground shrink-0'
+                    title={t('Set nickname')}
+                    onClick={() => {
+                      setNicknameInput(device.nickname ?? '')
+                      setEditingNicknameId(device.id)
+                    }}
+                  >
+                    <Pencil className='size-3' />
+                  </button>
+                </>
+              )}
+              <span
+                className={`size-2 shrink-0 rounded-full ${node && nodeOnline(node) ? 'bg-emerald-500' : 'bg-muted-foreground/40'}`}
+              />
+              <span className='text-muted-foreground shrink-0 text-xs'>
+                {node && nodeOnline(node) ? t('Online') : t('Offline')}
+              </span>
+            </div>
+            <div
+              className='text-muted-foreground truncate font-mono text-[11px] leading-4'
+              title={`${device.id}${node ? ` / ${node.id}` : ''}`}
+            >
+              {device.id}
+              {node ? ` / ${node.id}` : ''}
+            </div>
+          </div>
+        </div>
+
+        <div className='text-muted-foreground flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 text-xs lg:w-[360px] lg:flex-nowrap'>
+          <Badge variant='outline' className='h-5 max-w-28 truncate'>
+            {node?.region || t('No region')}
+          </Badge>
+          <span className='min-w-0 truncate'>{node?.state || '-'}</span>
+          <span className='shrink-0'>
+            {formatUnix(node?.last_seen_at ?? device.last_seen_at)}
+          </span>
+        </div>
+
+        <div className='flex items-center justify-between gap-2 lg:justify-end'>
+          {node && (
+            <label
+              className='flex items-center gap-1.5 text-xs'
+              title={nodeToggleTitle(node, capabilitiesLoaded)}
+            >
+              <Switch
+                size='sm'
+                checked={node.enabled}
+                disabled={
+                  togglingNodeId === node.id ||
+                  (!node.enabled &&
+                    (!capabilitiesLoaded || !nodeCanEnable(node.id)))
+                }
+                onCheckedChange={(next) => onToggleEnabled(node, next)}
+              />
+              <span
+                className={
+                  node.enabled ? 'text-emerald-600' : 'text-muted-foreground'
+                }
+              >
+                {node.enabled ? t('Enabled') : t('Disabled')}
+              </span>
+            </label>
+          )}
+          {node && (
+            <Button
+              size='sm'
+              variant='outline'
+              onClick={() => toggleNodeCapabilities(node.id)}
+            >
+              <Settings2 className='size-4' />
+              {t('Capabilities')}
+              {capabilitiesLoaded && (
+                <Badge variant='secondary'>{caps[node.id]?.length ?? 0}</Badge>
+              )}
+            </Button>
+          )}
+          {!node && (
+            <span className='text-muted-foreground text-xs'>
+              {t('No nodes on this device')}
+            </span>
+          )}
+          {node && !nodeOnline(node) && (
+            <Button
+              size='icon-sm'
+              variant='ghost'
+              title={t('Delete')}
+              onClick={() => onDeleteNode(node.id)}
+            >
+              <Trash2 className='size-4' />
+            </Button>
+          )}
+          {device.status === 'active' ? (
+            <Button
+              size='icon-sm'
+              variant='ghost'
+              title={t('Revoke')}
+              onClick={() => onRevokeDevice(device.id)}
+            >
+              <Ban className='size-4' />
+            </Button>
+          ) : (
+            <Button
+              size='icon-sm'
+              variant='ghost'
+              title={t('Delete')}
+              onClick={() => onDeleteDevice(device.id)}
+            >
+              <Trash2 className='size-4' />
+            </Button>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  function renderUngroupedNodeRow(node: NodeInfo) {
+    return (
+      <div
+        key={node.id}
+        className='hover:bg-muted/20 flex min-h-14 items-center gap-3 border-b px-3 py-2 last:border-b-0'
+      >
+        <Cpu className='text-muted-foreground size-4 shrink-0' />
+        <div className='min-w-0 flex-1'>
+          <div className='flex items-center gap-2 text-sm font-medium'>
+            {t('Node')}
+            <span
+              className={`size-2 rounded-full ${nodeOnline(node) ? 'bg-emerald-500' : 'bg-muted-foreground/40'}`}
+            />
+          </div>
+          <div
+            className='text-muted-foreground truncate font-mono text-[11px]'
+            title={node.id}
+          >
+            {node.id}
+          </div>
+        </div>
+        <Button
+          size='sm'
+          variant='outline'
+          onClick={() => toggleNodeCapabilities(node.id)}
+        >
+          <Settings2 className='size-4' />
+          {t('Capabilities')}
+        </Button>
+        {!nodeOnline(node) && (
+          <Button
+            size='icon-sm'
+            variant='ghost'
+            title={t('Delete')}
+            onClick={() => onDeleteNode(node.id)}
+          >
+            <Trash2 className='size-4' />
+          </Button>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <SectionPageLayout>
+      <SectionPageLayout.Title>{t('Devices & Nodes')}</SectionPageLayout.Title>
+      <SectionPageLayout.Actions>
+        <Button
+          variant='outline'
+          render={
+            <a href='/my-scripts' target='_blank' rel='noopener noreferrer' />
+          }
+        >
+          {t('My Scripts')}
+          <ExternalLink className='size-4' />
+        </Button>
+        {pluginRelease !== null && (
+          <Button variant='outline' onClick={() => setPluginDialogOpen(true)}>
+            <Download className='size-4' />
+            {t('Download plugin')}
+            {pluginRelease.version && (
+              <Badge variant='secondary'>v{pluginRelease.version}</Badge>
+            )}
+          </Button>
+        )}
+        <label className='text-muted-foreground mr-3 flex items-center gap-1 text-sm'>
+          <input
+            type='checkbox'
+            checked={hideInactive}
+            onChange={(e) => setHideInactive(e.target.checked)}
+          />
+          {t('Hide revoked/offline')}
+        </label>
+        <Button variant='outline' onClick={openTaskRecords}>
+          <History className='size-4' />
+          {t('Task records')}
+        </Button>
+        <Button
+          variant='outline'
+          onClick={() => {
+            void loadStatics()
+            void refreshCurrentPage()
+          }}
+          disabled={loading}
+        >
+          {t('Refresh')}
+        </Button>
+      </SectionPageLayout.Actions>
+      <SectionPageLayout.Content>
+        {/* Provider group: all of the caller's nodes belong to this group. */}
+        {providerGroup && (
+          <div className='mb-4 rounded-lg border p-3'>
+            <div className='text-muted-foreground text-xs'>
+              {t('Provider group')}
+            </div>
+            <div className='mt-1 flex flex-wrap items-center gap-x-3 gap-y-1'>
+              <span className='text-base font-semibold'>
+                {providerGroup.name}
+              </span>
+              <span className='text-muted-foreground font-mono text-xs'>
+                {providerGroup.id}
+              </span>
+            </div>
+            <div className='text-muted-foreground mt-1 text-xs'>
+              {t('All your nodes belong to this group by default.')}
+            </div>
+          </div>
+        )}
+
+        {/* Money earned running nodes (provider payable), day/week/month/total. */}
+        <div className='mb-6'>
+          <div className='mb-2 text-sm font-medium'>
+            {t('Provider earnings')}
+          </div>
+          <EarningsSummary role='provider' refreshKey={refreshTick} />
+        </div>
+
+        <div className='mb-3 flex items-end justify-between gap-3'>
+          <div>
+            <h2 className='font-medium'>{t('Devices & Nodes')}</h2>
+            <p className='text-muted-foreground text-sm'>
+              {t(
+                'Manage each device, its nodes, and the scripts provided by each node'
+              )}
+            </p>
+          </div>
+          <div className='text-muted-foreground shrink-0 text-xs'>
+            {total} {t('Rows')}
+          </div>
+        </div>
+        <div className='overflow-hidden rounded-md border'>
+          {rows.map((row) =>
+            row.device
+              ? renderDeviceRow(row.device, row.nodes)
+              : row.nodes.map((node) => renderUngroupedNodeRow(node))
+          )}
+          {rows.length === 0 && (
+            <div className='text-muted-foreground p-10 text-center'>
+              {loading || !initialLoaded ? t('Loading...') : t('No devices')}
+            </div>
+          )}
+        </div>
+        {total > 0 && (
+          <div className='mt-3 flex flex-wrap items-center justify-between gap-3 text-xs'>
+            <div className='text-muted-foreground'>
+              {t('Showing {{from}}-{{to}} of {{total}}', {
+                from: pageStart + 1,
+                to: pageStart + rows.length,
+                total,
+              })}
+            </div>
+            <div className='flex items-center gap-2'>
+              <label className='text-muted-foreground flex items-center gap-1'>
+                {t('Per page')}
+                <select
+                  className='text-foreground h-8 rounded-md border bg-transparent px-1.5'
+                  value={pageSize}
+                  onChange={(e) => setPageSize(Number(e.target.value))}
+                >
+                  {PAGE_SIZE_OPTIONS.map((size) => (
+                    <option key={size} value={size}>
+                      {size}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <Button
+                size='sm'
+                variant='outline'
+                disabled={page <= 1}
+                onClick={() => setPage(page - 1)}
+              >
+                {t('Previous page')}
+              </Button>
+              <span className='text-muted-foreground'>
+                {page} / {pageCount}
+              </span>
+              <Button
+                size='sm'
+                variant='outline'
+                disabled={page >= pageCount}
+                onClick={() => setPage(page + 1)}
+              >
+                {t('Next page')}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        <Dialog
+          open={Boolean(capabilityNodeId)}
+          onOpenChange={(open) => !open && setCapabilityNodeId(null)}
+        >
+          <DialogContent className='max-h-[90vh] overflow-y-auto sm:max-w-[min(1200px,calc(100vw-2rem))]'>
+            <DialogHeader className='pr-8'>
+              <DialogTitle>{t('Capabilities')}</DialogTitle>
+              <DialogDescription className='truncate font-mono text-xs'>
+                {capabilityNodeId}
+              </DialogDescription>
+            </DialogHeader>
+            {/* Capabilities are cached per node after the first open, so offer an
+                explicit refresh instead of refetching on every open. */}
+            <div className='flex justify-end'>
+              <Button
+                size='sm'
+                variant='outline'
+                onClick={() =>
+                  capabilityNodeId && void loadCaps(capabilityNodeId)
+                }
+              >
+                {t('Refresh')}
+              </Button>
+            </div>
+            {capabilityNodeId &&
+              (() => {
+                const node = pageNodes.find(
+                  (item) => item.id === capabilityNodeId
+                )
+                return node ? renderCapabilities(node) : null
+              })()}
+          </DialogContent>
+        </Dialog>
+
+        {/* Task records: per-node execution attempts (success/failure) across
+            all the caller's nodes. Params/results are E2EE and never stored, so
+            this shows the state, failure reason and target-site balance the
+            control plane does have — enough to debug node behavior. */}
+        <Dialog open={recordsOpen} onOpenChange={setRecordsOpen}>
+          <DialogContent className='max-h-[90vh] overflow-y-auto sm:max-w-[min(1200px,calc(100vw-2rem))]'>
+            <DialogHeader className='pr-8'>
+              <DialogTitle>{t('Task records')}</DialogTitle>
+              <DialogDescription>
+                {t(
+                  'Recent task executions on your nodes. Parameters and results are end-to-end encrypted and not stored — this shows the outcome and failure reason for debugging.'
+                )}
+              </DialogDescription>
+            </DialogHeader>
+            <div className='flex items-center justify-between'>
+              <span className='text-muted-foreground text-xs'>
+                {t('{{count}} records', { count: taskAttempts.length })}
+              </span>
+              <Button
+                size='sm'
+                variant='outline'
+                onClick={loadTaskAttempts}
+                disabled={attemptsLoading}
+              >
+                {attemptsLoading ? t('Loading...') : t('Refresh')}
+              </Button>
+            </div>
+            <div className='overflow-x-auto rounded-md border'>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{t('Time')}</TableHead>
+                    <TableHead>{t('Node')}</TableHead>
+                    <TableHead>{t('Script')}</TableHead>
+                    <TableHead>{t('Status')}</TableHead>
+                    <TableHead>{t('Reason')}</TableHead>
+                    <TableHead>{t('Balance')}</TableHead>
+                    <TableHead>{t('Task')}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {taskAttempts.map((a) => {
+                    let stateClass = 'text-muted-foreground'
+                    if (a.state === 'SUCCEEDED') {
+                      stateClass = 'text-emerald-600'
+                    } else if (a.state === 'FAILED' || a.state === 'EXPIRED') {
+                      stateClass = 'text-red-600'
+                    }
+                    return (
+                      <TableRow key={`${a.task_id}:${a.attempt}`}>
+                        <TableCell className='text-xs whitespace-nowrap'>
+                          {formatUnix(a.updated_at || a.created_at)}
+                        </TableCell>
+                        <TableCell className='max-w-[160px] truncate font-mono text-xs'>
+                          {a.node_id}
+                        </TableCell>
+                        <TableCell className='whitespace-nowrap'>
+                          #{a.script_id} v{a.version}
+                        </TableCell>
+                        <TableCell>
+                          <span className={`text-xs font-medium ${stateClass}`}>
+                            {a.state}
+                          </span>
+                        </TableCell>
+                        <TableCell className='text-xs text-red-600'>
+                          {a.error_code || '-'}
+                        </TableCell>
+                        <TableCell className='text-xs'>
+                          {a.script_balance ?? '-'}
+                        </TableCell>
+                        <TableCell className='max-w-[160px] truncate font-mono text-xs'>
+                          {a.task_id}
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                  {taskAttempts.length === 0 && (
+                    <TableRow>
+                      <TableCell
+                        colSpan={7}
+                        className='text-muted-foreground h-20 text-center'
+                      >
+                        {attemptsLoading
+                          ? t('Loading...')
+                          : t('No task records yet')}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Plugin download dialog: shows version, release notes, and download link */}
+        <Dialog open={pluginDialogOpen} onOpenChange={setPluginDialogOpen}>
+          <DialogContent className='max-w-md'>
+            <DialogHeader>
+              <DialogTitle>
+                {t('Browser Plugin')}
+                {pluginRelease?.version && (
+                  <Badge variant='secondary' className='ml-2'>
+                    v{pluginRelease.version}
+                  </Badge>
+                )}
+              </DialogTitle>
+              {pluginRelease?.release_notes ? (
+                <DialogDescription className='text-left whitespace-pre-wrap'>
+                  {pluginRelease.release_notes}
+                </DialogDescription>
+              ) : (
+                <DialogDescription>
+                  {t('Download the latest browser extension package.')}
+                </DialogDescription>
+              )}
+            </DialogHeader>
+            <div className='flex justify-end pt-2'>
+              <Button
+                render={
+                  <a
+                    href={PLUGIN_DOWNLOAD_URL}
+                    target='_blank'
+                    rel='noopener noreferrer'
+                  />
+                }
+                onClick={() => setPluginDialogOpen(false)}
+              >
+                <Download className='size-4' />
+                {t('Download')}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      </SectionPageLayout.Content>
+    </SectionPageLayout>
+  )
+}

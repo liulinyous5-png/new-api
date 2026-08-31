@@ -48,9 +48,6 @@ token.expired: "該令牌已過期"
 token.exhausted: "該令牌額度已用盡 TokenStatusExhausted[sk-{{.Prefix}}***{{.Suffix}}]"
 token.status_unavailable: "該令牌狀態不可用"
 token.db_error: "無效的令牌，資料庫查詢出錯，請聯繫管理員"
-token.auto_groups_too_many: "每個令牌最多可選擇 {{.Max}} 個 Auto 分組"
-token.auto_groups_duplicate: "Auto 分組 {{.Group}} 重複"
-token.auto_groups_invalid: "Auto 分組 {{.Group}} 不可用或無權存取"
 
 # Redemption messages
 redemption.name_length: "兌換碼名稱長度必須在1-20之間"
@@ -78,9 +75,6 @@ user.session_save_failed: "無法保存對話，請重試"
 user.require_2fa: "請輸入雙重驗證碼"
 user.email_verification_required: "管理員開啟了信箱驗證，請輸入信箱位址和驗證碼"
 user.verification_code_error: "驗證碼錯誤或已過期"
-user.email_already_taken: "信箱位址已被占用"
-user.password_unset: "目前帳號未設定密碼，請使用密碼重置或聯繫管理員重置密碼"
-user.password_reset_link_invalid: "重置連結非法或已過期"
 user.input_invalid: "輸入不合法 {{.Error}}"
 user.no_permission_same_level: "無權獲取同級或更高等級使用者的資訊"
 user.no_permission_higher_level: "無權更新同權限等級或更高權限等級的使用者資訊"
@@ -204,6 +198,12 @@ twofa.code_invalid: "驗證碼或備用碼不正確"
 # Rate limit messages
 rate_limit.reached: "您已達到請求數限制：{{.Minutes}}分鐘內最多請求{{.Max}}次"
 rate_limit.total_reached: "您已達到總請求數限制：{{.Minutes}}分鐘內最多請求{{.Max}}次，包括失敗次數"
+
+# Model concurrency messages
+model_concurrency.limit_reached: "並發已滿：您在模型 {{.Model}} 上進行中的任務數已達 {{.Current}}，上限為 {{.Max}}，請等待進行中的任務完成後再提交"
+model_concurrency.not_allowed: "您沒有使用模型 {{.Model}} 的權限，請聯繫管理員"
+user_concurrency.limit_reached: "異步任務總並發已滿：您目前有 {{.Current}} 個進行中的任務，總上限為 {{.Max}}，請等待任務完成後再提交"
+user_concurrency.not_allowed: "您不能提交異步任務，請聯繫管理員"
 
 # Setting messages
 setting.invalid_type: "無效的預警類型"

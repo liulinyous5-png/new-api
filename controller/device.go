@@ -1,0 +1,194 @@
+package controller
+
+import (
+	"errors"
+	"net/http"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/gin-gonic/gin"
+)
+
+// CreateDeviceChallenge issues a signing challenge for the authenticated user's
+// new device. The plugin signs the returned nonce with its Ed25519 device key.
+func CreateDeviceChallenge(c *gin.Context) {
+	userId := c.GetInt("id")
+	ch, err := model.CreateDeviceChallenge(userId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{
+		"challenge_id": ch.Id,
+		"nonce":        ch.Nonce,
+		"expires_at":   ch.ExpiresAt,
+	})
+}
+
+type activateDeviceRequest struct {
+	ChallengeId string `json:"challenge_id"`
+	PublicKey   string `json:"public_key"` // base64 Ed25519
+	Signature   string `json:"signature"`  // base64 signature over challenge message
+	Name        string `json:"name"`
+}
+
+// ActivateDevice verifies the signed challenge and returns the device session
+// (short-lived access token + device-bound refresh token).
+func ActivateDevice(c *gin.Context) {
+	userId := c.GetInt("id")
+	var req activateDeviceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if req.ChallengeId == "" || req.PublicKey == "" || req.Signature == "" {
+		common.ApiErrorMsg(c, "challenge_id, public_key and signature are required")
+		return
+	}
+	device, session, err := model.ActivateDevice(userId, req.ChallengeId, req.PublicKey, req.Signature, req.Name)
+	if err != nil {
+		if errors.Is(err, model.ErrChallengeInvalid) {
+			common.ApiErrorMsg(c, "challenge invalid or expired")
+			return
+		}
+		if errors.Is(err, model.ErrDeviceRevoked) {
+			// Signal a stable code so the plugin can rotate to a fresh device
+			// key and re-register as a NEW device (the revoked one stays for
+			// audit). A revoked device is never silently revived.
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false, "message": "device revoked", "error_code": "DEVICE_REVOKED",
+			})
+			return
+		}
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	common.ApiSuccess(c, gin.H{"device": device, "session": session})
+}
+
+type refreshDeviceRequest struct {
+	DeviceId     string `json:"device_id"`
+	RefreshToken string `json:"refresh_token"`
+}
+
+// RefreshDeviceSession rotates a device's token pair using its refresh token.
+func RefreshDeviceSession(c *gin.Context) {
+	var req refreshDeviceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	session, err := model.RefreshDeviceSession(req.DeviceId, req.RefreshToken)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	common.ApiSuccess(c, session)
+}
+
+// ListMyDevices returns the authenticated user's devices.
+func ListMyDevices(c *gin.Context) {
+	devices, err := model.ListUserDevices(c.GetInt("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, devices)
+}
+
+// ListMyConsoleRows returns one page of the caller's console rows (a device
+// plus its nodes; device-less nodes come as rows with a null device). Paging is
+// server-side so the console can render — and per-node-fan-out over — at most
+// one page at a time instead of every device a provider owns.
+//
+// Query: ?p / ?page_size (shared pagination params), ?active_only=true to drop
+// revoked devices and offline nodes.
+func ListMyConsoleRows(c *gin.Context) {
+	pageInfo := common.GetPageQuery(c)
+	activeOnly := c.Query("active_only") == "true"
+	rows, total, err := model.ListUserConsoleRows(
+		c.GetInt("id"), activeOnly, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	pageInfo.SetTotal(int(total))
+	pageInfo.SetItems(rows)
+	common.ApiSuccess(c, pageInfo)
+}
+
+// RevokeMyDevice revokes a device and suspends its nodes/capabilities.
+func RevokeMyDevice(c *gin.Context) {
+	deviceId := c.Param("deviceId")
+	if deviceId == "" {
+		common.ApiErrorMsg(c, "device id is required")
+		return
+	}
+	if err := model.RevokeDevice(c.GetInt("id"), deviceId); err != nil {
+		if errors.Is(err, model.ErrDeviceNotFound) {
+			common.ApiErrorMsg(c, "device not found")
+			return
+		}
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, nil)
+}
+
+type setDeviceNicknameRequest struct {
+	Nickname string `json:"nickname"`
+}
+
+// SetMyDeviceNickname sets a user-defined label on one of the caller's devices
+// so the console can tell otherwise-identical devices apart. An empty nickname
+// clears it. The nickname is trimmed and capped at 128 chars.
+func SetMyDeviceNickname(c *gin.Context) {
+	deviceId := c.Param("deviceId")
+	if deviceId == "" {
+		common.ApiErrorMsg(c, "device id is required")
+		return
+	}
+	var req setDeviceNicknameRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	nickname := strings.TrimSpace(req.Nickname)
+	if utf8.RuneCountInString(nickname) > 128 {
+		common.ApiErrorMsg(c, "nickname must be at most 128 characters")
+		return
+	}
+	if err := model.SetDeviceNickname(c.GetInt("id"), deviceId, nickname); err != nil {
+		if errors.Is(err, model.ErrDeviceNotFound) {
+			common.ApiErrorMsg(c, "device not found")
+			return
+		}
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{"device_id": deviceId, "nickname": nickname})
+}
+
+// DeleteMyDevice permanently removes a REVOKED device and its nodes/capabilities.
+func DeleteMyDevice(c *gin.Context) {
+	deviceId := c.Param("deviceId")
+	if deviceId == "" {
+		common.ApiErrorMsg(c, "device id is required")
+		return
+	}
+	if err := model.DeleteRevokedDevice(c.GetInt("id"), deviceId); err != nil {
+		if errors.Is(err, model.ErrDeviceNotFound) {
+			common.ApiErrorMsg(c, "device not found")
+			return
+		}
+		if errors.Is(err, model.ErrDeviceNotRevoked) {
+			common.ApiErrorMsg(c, "revoke the device before deleting it")
+			return
+		}
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, nil)
+}

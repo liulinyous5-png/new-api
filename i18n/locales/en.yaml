@@ -47,9 +47,6 @@ token.expired: "This token has expired"
 token.exhausted: "This token quota is exhausted TokenStatusExhausted[sk-{{.Prefix}}***{{.Suffix}}]"
 token.status_unavailable: "This token status is unavailable"
 token.db_error: "Invalid token, database query error, please contact administrator"
-token.auto_groups_too_many: "A token can select at most {{.Max}} Auto groups"
-token.auto_groups_duplicate: "Auto group {{.Group}} is duplicated"
-token.auto_groups_invalid: "Auto group {{.Group}} is unavailable or unauthorized"
 
 # Redemption messages
 redemption.name_length: "Redemption code name length must be between 1-20"
@@ -77,9 +74,6 @@ user.session_save_failed: "Failed to save session, please try again"
 user.require_2fa: "Please enter two-factor authentication code"
 user.email_verification_required: "Email verification is enabled, please enter email address and verification code"
 user.verification_code_error: "Verification code is incorrect or has expired"
-user.email_already_taken: "Email address is already in use"
-user.password_unset: "This account has no password set. Please use password reset or contact an administrator to reset it."
-user.password_reset_link_invalid: "Password reset link is invalid or has expired"
 user.input_invalid: "Invalid input {{.Error}}"
 user.no_permission_same_level: "No permission to access users of same or higher level"
 user.no_permission_higher_level: "No permission to update users of same or higher permission level"
@@ -203,6 +197,12 @@ twofa.code_invalid: "Verification code or backup code is incorrect"
 # Rate limit messages
 rate_limit.reached: "You have reached the request limit: maximum {{.Max}} requests in {{.Minutes}} minutes"
 rate_limit.total_reached: "You have reached the total request limit: maximum {{.Max}} requests in {{.Minutes}} minutes, including failed attempts"
+
+# Model concurrency messages
+model_concurrency.limit_reached: "Concurrency limit reached: you already have {{.Current}} tasks in progress on model {{.Model}} (limit {{.Max}}). Please wait for them to finish before submitting a new task."
+model_concurrency.not_allowed: "You are not allowed to use model {{.Model}}. Please contact the administrator."
+user_concurrency.limit_reached: "Total async task concurrency limit reached: you have {{.Current}} tasks in progress (total limit {{.Max}}). Please wait for them to finish before submitting a new task."
+user_concurrency.not_allowed: "You are not allowed to submit async tasks. Please contact the administrator."
 
 # Setting messages
 setting.invalid_type: "Invalid warning type"

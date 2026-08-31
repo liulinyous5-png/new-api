@@ -5,7 +5,7 @@ import (
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/relay"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -15,6 +15,10 @@ func SetRelayRouter(router *gin.Engine) {
 	router.Use(middleware.DecompressRequestMiddleware())
 	router.Use(middleware.BodyStorageCleanup()) // 清理请求体存储
 	router.Use(middleware.StatsMiddleware())
+	modelMetadataRouter := router.Group("/v1/model-metadata")
+	modelMetadataRouter.Use(middleware.RouteTag("relay"))
+	modelMetadataRouter.Use(middleware.TokenAuth())
+	modelMetadataRouter.GET("", controller.GetPricingModel)
 	// https://platform.openai.com/docs/api-reference/introduction
 	modelsRouter := router.Group("/v1/models")
 	modelsRouter.Use(middleware.RouteTag("relay"))
@@ -25,7 +29,7 @@ func SetRelayRouter(router *gin.Engine) {
 			case c.GetHeader("x-api-key") != "" && c.GetHeader("anthropic-version") != "":
 				controller.ListModels(c, constant.ChannelTypeAnthropic)
 			case c.GetHeader("x-goog-api-key") != "" || c.Query("key") != "": // 单独的适配
-				controller.ListModels(c, constant.ChannelTypeGemini)
+				controller.RetrieveModel(c, constant.ChannelTypeGemini)
 			default:
 				controller.ListModels(c, constant.ChannelTypeOpenAI)
 			}
@@ -98,13 +102,11 @@ func SetRelayRouter(router *gin.Engine) {
 		})
 
 		// response related routes
+		httpRouter.POST("/responses", func(c *gin.Context) {
+			controller.Relay(c, types.RelayFormatOpenAIResponses)
+		})
 		httpRouter.POST("/responses/compact", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAIResponsesCompaction)
-		})
-
-		// alpha search related routes (Codex standalone web search)
-		httpRouter.POST("/alpha/search", func(c *gin.Context) {
-			controller.Relay(c, types.RelayFormatOpenAIAlphaSearch)
 		})
 
 		// image related routes
@@ -177,6 +179,16 @@ func SetRelayRouter(router *gin.Engine) {
 	relayMjModeRouter.Use(middleware.SystemPerformanceCheck())
 	registerMjRouterGroup(relayMjModeRouter)
 	//relayMjRouter.Use()
+
+	relaySunoRouter := router.Group("/suno")
+	relaySunoRouter.Use(middleware.RouteTag("relay"))
+	relaySunoRouter.Use(middleware.SystemPerformanceCheck())
+	relaySunoRouter.Use(middleware.TokenAuth(), middleware.Distribute())
+	{
+		relaySunoRouter.POST("/submit/:action", controller.RelayTask)
+		relaySunoRouter.POST("/fetch", controller.RelayTaskFetch)
+		relaySunoRouter.GET("/fetch/:id", controller.RelayTaskFetch)
+	}
 
 	relayGeminiRouter := router.Group("/v1beta")
 	relayGeminiRouter.Use(middleware.RouteTag("relay"))

@@ -7,20 +7,21 @@ const (
 	ContextKeyPromptTokens    ContextKey = "prompt_tokens"
 	ContextKeyEstimatedTokens ContextKey = "estimated_tokens"
 
-	ContextKeyOriginalModel    ContextKey = "original_model"
-	ContextKeyRequestStartTime ContextKey = "request_start_time"
+	ContextKeyOriginalModel        ContextKey = "original_model"
+	ContextKeyRequestStartTime     ContextKey = "request_start_time"
+	ContextKeyPublicTaskID         ContextKey = "public_task_id"
+	ContextKeyUpstreamTaskID       ContextKey = "upstream_task_id"
+	ContextKeyExposeUpstreamTaskID ContextKey = "expose_upstream_task_id"
 
 	/* token related keys */
 	ContextKeyTokenUnlimited         ContextKey = "token_unlimited_quota"
 	ContextKeyTokenKey               ContextKey = "token_key"
 	ContextKeyTokenId                ContextKey = "token_id"
 	ContextKeyTokenGroup             ContextKey = "token_group"
-	ContextKeyOriginTasks            ContextKey = "origin_tasks"
-	ContextKeyChannelConstraints     ContextKey = "channel_constraints"
+	ContextKeyTokenSpecificChannelId ContextKey = "specific_channel_id"
 	ContextKeyTokenModelLimitEnabled ContextKey = "token_model_limit_enabled"
 	ContextKeyTokenModelLimit        ContextKey = "token_model_limit"
 	ContextKeyTokenCrossGroupRetry   ContextKey = "token_cross_group_retry"
-	ContextKeyTokenAutoGroups        ContextKey = "token_auto_groups"
 
 	/* channel related keys */
 	ContextKeyChannelId                ContextKey = "channel_id"

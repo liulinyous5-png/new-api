@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -54,13 +52,6 @@ func InitOptionMap() {
 	common.OptionMap["DisplayTokenStatEnabled"] = strconv.FormatBool(common.DisplayTokenStatEnabled)
 	common.OptionMap["DrawingEnabled"] = strconv.FormatBool(common.DrawingEnabled)
 	common.OptionMap["TaskEnabled"] = strconv.FormatBool(common.TaskEnabled)
-	common.OptionMap["TaskPluginEnabled"] = strconv.FormatBool(constant.TaskPluginEnabled)
-	jsplugin.DefaultRegistry.SetEnabled(constant.TaskPluginEnabled)
-	common.OptionMap["TaskPluginOverrideEnabled"] = strconv.FormatBool(constant.TaskPluginOverrideEnabled)
-	jsplugin.DefaultRegistry.SetOverrideEnabled(constant.TaskPluginOverrideEnabled)
-	common.OptionMap[setting.TaskPluginMarketplaceSourcesKey] = setting.TaskPluginMarketplaceSources2JsonString()
-	common.OptionMap[setting.TaskPluginDisabledFactoryKeysKey] = "[]"
-	jsplugin.DefaultRegistry.SetDisabledFactoryKeys(nil)
 	common.OptionMap["DataExportEnabled"] = strconv.FormatBool(common.DataExportEnabled)
 	common.OptionMap["ChannelDisableThreshold"] = strconv.FormatFloat(common.ChannelDisableThreshold, 'f', -1, 64)
 	common.OptionMap["EmailDomainRestrictionEnabled"] = strconv.FormatBool(common.EmailDomainRestrictionEnabled)
@@ -82,7 +73,6 @@ func InitOptionMap() {
 	common.OptionMap["SystemName"] = common.SystemName
 	common.OptionMap["Logo"] = common.Logo
 	common.OptionMap["ServerAddress"] = ""
-	common.OptionMap["TaskPublicAddress"] = system_setting.TaskPublicAddress
 	common.OptionMap["WorkerUrl"] = system_setting.WorkerUrl
 	common.OptionMap["WorkerValidKey"] = system_setting.WorkerValidKey
 	common.OptionMap["WorkerAllowHttpImageRequestEnabled"] = strconv.FormatBool(system_setting.WorkerAllowHttpImageRequestEnabled)
@@ -130,7 +120,6 @@ func InitOptionMap() {
 	common.OptionMap["Chats"] = setting.Chats2JsonString()
 	common.OptionMap["AutoGroups"] = setting.AutoGroups2JsonString()
 	common.OptionMap["DefaultUseAutoGroup"] = strconv.FormatBool(setting.DefaultUseAutoGroup)
-	common.OptionMap["MaxTokenAutoGroups"] = strconv.Itoa(setting.GetMaxTokenAutoGroups())
 	common.OptionMap["PayMethods"] = operation_setting.PayMethods2JsonString()
 	common.OptionMap["GitHubClientId"] = ""
 	common.OptionMap["GitHubClientSecret"] = ""
@@ -186,6 +175,11 @@ func InitOptionMap() {
 	common.OptionMap["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString()
 	common.OptionMap["AutomaticRetryStatusCodes"] = operation_setting.AutomaticRetryStatusCodesToString()
 	common.OptionMap["ExposeRatioEnabled"] = strconv.FormatBool(ratio_setting.IsExposeRatioEnabled())
+	// Platform script-signing key (Ed25519). The seed is a secret and is never
+	// returned by GetOptions; only the key id is surfaced. Managed from the admin
+	// script-review console (generate) and persisted here so it survives restarts.
+	common.OptionMap["ScriptSigningKeyId"] = common.ScriptSigningKeyId
+	common.OptionMap["ScriptSigningKeySeed"] = common.ScriptSigningKeySeed
 
 	// 自动添加所有注册的模型配置
 	modelConfigs := config.GlobalConfig.ExportAllConfigs()
@@ -215,23 +209,7 @@ func SyncOptions(frequency int) {
 	}
 }
 
-func validateOptionValue(key string, value string) error {
-	if key == operation_setting.ToolPriceOptionKey {
-		return operation_setting.ValidateToolPricesJSON(value)
-	}
-	if key == operation_setting.ChannelTestConcurrencyOptionKey {
-		return operation_setting.ValidateChannelTestConcurrency(value)
-	}
-	if key == "MaxTokenAutoGroups" {
-		return setting.ValidateMaxTokenAutoGroups(value)
-	}
-	return nil
-}
-
 func UpdateOption(key string, value string) error {
-	if err := validateOptionValue(key, value); err != nil {
-		return err
-	}
 	// Save to database first
 	option := Option{
 		Key: key,
@@ -255,11 +233,6 @@ func UpdateOption(key string, value string) error {
 func UpdateOptionsBulk(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
-	}
-	for key, value := range values {
-		if err := validateOptionValue(key, value); err != nil {
-			return err
-		}
 	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		for k, v := range values {
@@ -286,12 +259,6 @@ func UpdateOptionsBulk(values map[string]string) error {
 }
 
 func updateOptionMap(key string, value string) (err error) {
-	if key == retiredThemeOptionKey {
-		common.OptionMapRWMutex.Lock()
-		delete(common.OptionMap, key)
-		common.OptionMapRWMutex.Unlock()
-		return nil
-	}
 	common.OptionMapRWMutex.Lock()
 	defer common.OptionMapRWMutex.Unlock()
 	common.OptionMap[key] = value
@@ -362,12 +329,6 @@ func updateOptionMap(key string, value string) (err error) {
 			common.DrawingEnabled = boolValue
 		case "TaskEnabled":
 			common.TaskEnabled = boolValue
-		case "TaskPluginEnabled":
-			constant.TaskPluginEnabled = boolValue
-			jsplugin.DefaultRegistry.SetEnabled(boolValue)
-		case "TaskPluginOverrideEnabled":
-			constant.TaskPluginOverrideEnabled = boolValue
-			jsplugin.DefaultRegistry.SetOverrideEnabled(boolValue)
 		case "DataExportEnabled":
 			common.DataExportEnabled = boolValue
 		case "DefaultCollapseSidebar":
@@ -410,9 +371,6 @@ func updateOptionMap(key string, value string) (err error) {
 			ratio_setting.SetExposeRatioEnabled(boolValue)
 		}
 	}
-	if key == setting.TaskPluginDisabledFactoryKeysKey {
-		jsplugin.DefaultRegistry.SetDisabledFactoryKeys(setting.ParseTaskPluginDisabledFactoryKeys(value))
-	}
 	switch key {
 	case "EmailDomainWhitelist":
 		common.EmailDomainWhitelist = strings.Split(value, ",")
@@ -429,8 +387,6 @@ func updateOptionMap(key string, value string) (err error) {
 		common.SMTPToken = value
 	case "ServerAddress":
 		system_setting.ServerAddress = value
-	case "TaskPublicAddress":
-		system_setting.TaskPublicAddress = value
 	case "WorkerUrl":
 		system_setting.WorkerUrl = value
 	case "WorkerValidKey":
@@ -441,8 +397,6 @@ func updateOptionMap(key string, value string) (err error) {
 		err = setting.UpdateChatsByJsonString(value)
 	case "AutoGroups":
 		err = setting.UpdateAutoGroupsByJsonString(value)
-	case "MaxTokenAutoGroups":
-		err = setting.UpdateMaxTokenAutoGroups(value)
 	case "CustomCallbackAddress":
 		operation_setting.CustomCallbackAddress = value
 	case "EpayId":
@@ -531,6 +485,10 @@ func updateOptionMap(key string, value string) (err error) {
 		common.LinuxDOClientSecret = value
 	case "LinuxDOMinimumTrustLevel":
 		common.LinuxDOMinimumTrustLevel, _ = strconv.Atoi(value)
+	case "ScriptSigningKeyId":
+		common.ScriptSigningKeyId = value
+	case "ScriptSigningKeySeed":
+		common.ScriptSigningKeySeed = value
 	case "Footer":
 		common.Footer = value
 	case "SystemName":
@@ -629,11 +587,6 @@ func updateOptionMap(key string, value string) (err error) {
 
 // handleConfigUpdate 处理分层配置更新，返回是否已处理
 func handleConfigUpdate(key, value string) bool {
-	if key == operation_setting.ToolPriceOptionKey {
-		operation_setting.LoadToolPricesFromJSONString(value)
-		return true
-	}
-
 	parts := strings.SplitN(key, ".", 2)
 	if len(parts) != 2 {
 		return false // 不是分层配置
@@ -657,9 +610,13 @@ func handleConfigUpdate(key, value string) bool {
 	// 特定配置的后处理
 	if configName == "performance_setting" {
 		performance_setting.UpdateAndSync()
+	} else if configName == "tool_price_setting" {
+		operation_setting.RebuildToolPriceIndex()
 	} else if configName == "billing_setting" {
 		InvalidatePricingCache()
 		ratio_setting.InvalidateExposedDataCache()
+	} else if configName == "theme" {
+		system_setting.UpdateAndSyncTheme()
 	}
 
 	return true // 已处理

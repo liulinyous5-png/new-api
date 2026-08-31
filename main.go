@@ -23,38 +23,40 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
-	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/router"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/service/dispatch"
+	"github.com/QuantumNous/new-api/service/nodehub"
+	"github.com/QuantumNous/new-api/service/settlement"
 	_ "github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
+	"github.com/gin-contrib/sessions"
+	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 
 	_ "net/http/pprof"
 )
 
-//go:embed web/dist
+//go:embed web/default/dist
 var buildFS embed.FS
 
-//go:embed web/dist/index.html
+//go:embed web/default/dist/index.html
 var indexPage []byte
 
+//go:embed web/classic/dist
+var classicBuildFS embed.FS
+
+//go:embed web/classic/dist/index.html
+var classicIndexPage []byte
+
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "plugin" {
-		os.Exit(jsplugin.RunCLI(os.Args[2:], os.Stdout, os.Stderr))
-	}
 	startTime := time.Now()
-	kitutil.SetLogging(common.SysLog, func(message string) {
-		logger.LogError(nil, message)
-	})
-	kitutil.SetSystemErrorLogging(common.SysError)
 
 	err := InitResources()
 	if err != nil {
@@ -69,8 +71,6 @@ func main() {
 	if common.DebugEnabled {
 		common.SysLog("running in debug mode")
 	}
-
-	kitutil.Debug.Store(common.DebugEnabled)
 
 	defer func() {
 		err := model.CloseDB()
@@ -105,13 +105,8 @@ func main() {
 		go model.SyncChannelCache(common.SyncFrequency)
 	}
 
-	// Warm pricing after channel cache initialization so Advanced Custom
-	// endpoint inference can read cached route settings on first request.
-	model.GetPricing()
-
 	// 热更新配置
 	go model.SyncOptions(common.SyncFrequency)
-	go controller.SyncTaskPlugins()
 
 	// 周期性重载授权策略，保证多节点/多 master 部署下权限变更能传播到每个实例
 	go authz.StartPolicySync(common.SyncFrequency)
@@ -136,6 +131,26 @@ func main() {
 	// Report this process as a system instance so the System Info page can show
 	// all currently alive nodes in multi-instance deployments.
 	service.StartSystemInstanceReporter()
+
+	// Outbox publisher: drains task.offer (and other control events) enqueued by
+	// the scheduler and pushes them to the owning node's live control channel.
+	go dispatch.StartPublisher(nodehub.Default, time.Second, make(chan struct{}))
+
+	// Stale-lease sweeper: releases leases whose TTL elapsed without a terminal
+	// signal from the provider (e.g. the provider tab closed mid-run), so a
+	// leaked lease can't permanently occupy a node's concurrency slot. Master
+	// only — it mutates shared lease/node state.
+	if common.IsMasterNode {
+		go dispatch.StartLeaseExpiryLoop(time.Minute, make(chan struct{}))
+
+		// Stale-order sweep: bottom-out orders whose funds would otherwise stay
+		// frozen. When a buyer's page reloads mid-run the client receipt never
+		// arrives, so an order the provider already executed sticks in VERIFYING
+		// with the buyer's funds reserved and the node/author unpaid. This sweep
+		// settles those on the provider receipt, and refunds orders abandoned
+		// before delivery. Master only — it mutates shared order/ledger state.
+		go settlement.StartStaleOrderSweep(time.Minute, make(chan struct{}))
+	}
 
 	// Wire task polling adaptor factory (breaks service -> relay import cycle).
 	// Must run before the system task runner starts: the async_task_poll handler
@@ -177,10 +192,6 @@ func main() {
 
 	// Initialize HTTP server
 	server := gin.New()
-	if err := middleware.ConfigureTrustedProxies(server); err != nil {
-		common.FatalLog("failed to configure trusted proxies: " + err.Error())
-		return
-	}
 	server.Use(gin.CustomRecovery(func(c *gin.Context, err any) {
 		common.SysLog(fmt.Sprintf("panic detected: %v", err))
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -193,16 +204,29 @@ func main() {
 	// This will cause SSE not to work!!!
 	//server.Use(gzip.Gzip(gzip.DefaultCompression))
 	server.Use(middleware.RequestId())
-	server.Use(middleware.Version())
+	server.Use(middleware.PoweredBy())
 	server.Use(middleware.I18n())
 	middleware.SetUpLogger(server)
+	// Initialize session store
+	store := cookie.NewStore([]byte(common.SessionSecret))
+	store.Options(sessions.Options{
+		Path:     "/",
+		MaxAge:   2592000, // 30 days
+		HttpOnly: true,
+		Secure:   false,
+		SameSite: http.SameSiteStrictMode,
+	})
+	server.Use(sessions.Sessions("session", store))
+
 	InjectUmamiAnalytics()
 	InjectGoogleAnalytics()
 
 	// 设置路由
-	router.SetRouter(server, router.WebAssets{
-		BuildFS:   buildFS,
-		IndexPage: indexPage,
+	router.SetRouter(server, router.ThemeAssets{
+		DefaultBuildFS:   buildFS,
+		DefaultIndexPage: indexPage,
+		ClassicBuildFS:   classicBuildFS,
+		ClassicIndexPage: classicIndexPage,
 	})
 	var port = os.Getenv("PORT")
 	if port == "" {
@@ -219,8 +243,6 @@ func main() {
 			common.FatalLog("failed to start HTTP server: " + err.Error())
 		}
 	}()
-
-	time.Sleep(100 * time.Millisecond)
 
 	common.LogStartupSuccess(startTime, port)
 
@@ -261,6 +283,7 @@ func InjectUmamiAnalytics() {
 	analyticsInject := []byte(analyticsInjectBuilder.String())
 	placeholder := []byte("<!--umami-->\n")
 	indexPage = bytes.ReplaceAll(indexPage, placeholder, analyticsInject)
+	classicIndexPage = bytes.ReplaceAll(classicIndexPage, placeholder, analyticsInject)
 }
 
 func InjectGoogleAnalytics() {
@@ -284,6 +307,7 @@ func InjectGoogleAnalytics() {
 	analyticsInject := []byte(analyticsInjectBuilder.String())
 	placeholder := []byte("<!--Google Analytics-->\n")
 	indexPage = bytes.ReplaceAll(indexPage, placeholder, analyticsInject)
+	classicIndexPage = bytes.ReplaceAll(classicIndexPage, placeholder, analyticsInject)
 }
 
 func InitResources() error {
@@ -318,25 +342,17 @@ func InitResources() error {
 		common.FatalLog("failed to initialize authorization: " + err.Error())
 		return err
 	}
-	if common.PasswordLoginEncryptionEnabled {
-		if err = model.InitPasswordEncryption(); err != nil {
-			common.FatalLog("failed to initialize password encryption: " + err.Error())
-			return err
-		}
-	}
 
 	model.CheckSetup()
 
 	// Initialize options, should after model.InitDB()
-	if common.IsMasterNode {
-		if err := model.MigrateRetiredFrontendOptions(); err != nil {
-			common.SysError("failed to migrate retired frontend options: " + err.Error())
-		}
-	}
 	model.InitOptionMap()
 
 	// 清理旧的磁盘缓存文件
 	common.CleanupOldCacheFiles()
+
+	// 初始化模型
+	model.GetPricing()
 
 	// Initialize SQL Database
 	err = model.InitLogDB()
@@ -372,8 +388,6 @@ func InitResources() error {
 		common.SysError("failed to load custom OAuth providers: " + err.Error())
 		// Don't return error, custom OAuth is not critical
 	}
-
-	service.StartAuthArtifactCleanup()
 
 	return nil
 }
