@@ -216,6 +216,22 @@ func TaskErrorWrapper(err error, code string, statusCode int) *taskdto.TaskError
 	return taskError
 }
 
+// TaskErrorFromUpstreamResponse normalizes common upstream JSON error shapes
+// into a task error without embedding the entire JSON document in Message.
+func TaskErrorFromUpstreamResponse(responseBody []byte, code string, statusCode int) *taskdto.TaskError {
+	message := strings.TrimSpace(string(responseBody))
+	var response dto.GeneralErrorResponse
+	if len(responseBody) > 0 && common.Unmarshal(responseBody, &response) == nil {
+		if parsedMessage := strings.TrimSpace(response.ToMessage()); parsedMessage != "" {
+			message = parsedMessage
+		}
+	}
+	if message == "" {
+		message = fmt.Sprintf("upstream returned status %d", statusCode)
+	}
+	return TaskErrorWrapper(errors.New(message), code, statusCode)
+}
+
 // TaskErrorFromAPIError 将 PreConsumeBilling 返回的 NewAPIError 转换为 TaskError。
 func TaskErrorFromAPIError(apiErr *types.NewAPIError) *taskdto.TaskError {
 	if apiErr == nil {

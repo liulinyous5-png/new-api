@@ -247,6 +247,30 @@ func TestDispatchPlatformUpdateUsesFetchMode(t *testing.T) {
 	GetTaskAdaptorFunc = previousFactory
 }
 
+func TestRefreshTaskOnDemandFetchesInitialTask(t *testing.T) {
+	truncate(t)
+	const channelID = 110
+	seedTaskPollingChannel(t, channelID, true)
+	task := seedPollingTask(t, channelID, "task_initial_refresh", "upstream_initial_refresh")
+	require.NoError(t, model.DB.Model(task).Update("status", model.TaskStatusNotStart).Error)
+	task.Status = model.TaskStatusNotStart
+
+	adaptor := &taskPollingFetchAdaptor{}
+	previousFactory := GetTaskAdaptorFunc
+	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return adaptor }
+	t.Cleanup(func() { GetTaskAdaptorFunc = previousFactory })
+
+	require.NoError(t, RefreshTaskOnDemand(context.Background(), task))
+	assert.Equal(t, []string{"upstream_initial_refresh"}, adaptor.fetchedTaskIDs())
+	assert.Equal(t, model.TaskStatus(model.TaskStatusInProgress), task.Status)
+	assert.Equal(t, "30%", task.Progress)
+
+	var persisted model.Task
+	require.NoError(t, model.DB.First(&persisted, task.ID).Error)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusInProgress), persisted.Status)
+	assert.Equal(t, "30%", persisted.Progress)
+}
+
 func TestUpdateBatchTasksSettlesTieredUsageForTerminalStates(t *testing.T) {
 	testCases := []struct {
 		name        string

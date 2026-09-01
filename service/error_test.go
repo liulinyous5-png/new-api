@@ -150,6 +150,52 @@ func TestRelayErrorHandlerKeepsInvalidJSONBodyInDebugLog(t *testing.T) {
 	require.Contains(t, logBuffer.String(), body)
 }
 
+func TestTaskErrorFromUpstreamResponseExtractsMessage(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "nested error object",
+			body: `{"error":{"message":"input image may contain a real person"},"type":"error"}`,
+			want: "input image may contain a real person",
+		},
+		{
+			name: "top-level message",
+			body: `{"message":"request rejected"}`,
+			want: "request rejected",
+		},
+		{
+			name: "string error",
+			body: `{"error":"quota exceeded"}`,
+			want: "quota exceeded",
+		},
+		{
+			name: "invalid JSON falls back to body",
+			body: `upstream unavailable`,
+			want: "upstream unavailable",
+		},
+		{
+			name: "empty body uses status",
+			body: ``,
+			want: "upstream returned status 502",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			taskErr := TaskErrorFromUpstreamResponse([]byte(testCase.body), "fail_to_fetch_task", http.StatusBadGateway)
+			require.Equal(t, testCase.want, taskErr.Message)
+			require.Equal(t, "fail_to_fetch_task", taskErr.Code)
+			require.Equal(t, http.StatusBadGateway, taskErr.StatusCode)
+		})
+	}
+}
+
 func withDebugEnabled(t *testing.T, enabled bool) {
 	t.Helper()
 

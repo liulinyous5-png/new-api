@@ -1180,6 +1180,18 @@ func renderTaskPluginQuery(
 			abortTaskPluginRouteError(c, http.StatusNotFound)
 			return
 		}
+		if task.Status == model.TaskStatusNotStart {
+			if refreshErr := service.RefreshTaskOnDemand(c.Request.Context(), task); refreshErr != nil {
+				logger.LogWarn(
+					c,
+					"task_plugin subsystem=query event=initial_refresh_failed generation=%d plugin=%q task_id=%q err=%q",
+					generation,
+					pinned.Plugin.Meta.Key,
+					task.TaskID,
+					refreshErr.Error(),
+				)
+			}
+		}
 		view, viewErr := service.BuildTaskPluginView(task)
 		if viewErr != nil {
 			abortTaskPluginRouteError(c, http.StatusInternalServerError)

@@ -367,6 +367,48 @@ func UpdateVideoTasks(ctx context.Context, platform constant.TaskPlatform, taskC
 	return nil
 }
 
+// RefreshTaskOnDemand performs one upstream status fetch for a persisted task.
+// It reuses the regular polling settlement path so an on-demand refresh and the
+// background poller remain safe when they race on the same status transition.
+func RefreshTaskOnDemand(ctx context.Context, task *model.Task) error {
+	if task == nil {
+		return fmt.Errorf("task is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if GetTaskAdaptorFunc == nil {
+		return fmt.Errorf("task adaptor factory is unavailable")
+	}
+
+	upstreamID := task.GetUpstreamTaskID()
+	if upstreamID == "" {
+		return fmt.Errorf("task %s has no upstream task id", task.TaskID)
+	}
+	channel, err := model.CacheGetChannel(task.ChannelId)
+	if err != nil {
+		return fmt.Errorf("get channel %d: %w", task.ChannelId, err)
+	}
+	adaptor := GetTaskAdaptorFunc(task.Platform)
+	if adaptor == nil {
+		return fmt.Errorf("task adaptor not found for platform %s", task.Platform)
+	}
+
+	tasks := map[string]*model.Task{upstreamID: task}
+	if batchAdaptor, ok := adaptor.(BatchTaskPollingAdaptor); ok && batchAdaptor.FetchMode() == "batch" {
+		return updateBatchTasks(ctx, batchAdaptor, task.ChannelId, []string{upstreamID}, tasks)
+	}
+
+	info := &relaycommon.RelayInfo{}
+	info.ChannelMeta = &relaycommon.ChannelMeta{ChannelBaseUrl: channel.GetBaseURL()}
+	info.ApiKey = channel.Key
+	adaptor.Init(info)
+	return updateVideoSingleTask(ctx, adaptor, channel, upstreamID, tasks)
+}
+
 func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, channelId int, taskIds []string, taskM map[string]*model.Task) error {
 	logger.LogInfo(ctx, fmt.Sprintf("Channel #%d pending video tasks: %d", channelId, len(taskIds)))
 	if ctx.Err() != nil {

@@ -19,6 +19,10 @@ export const meta = {
     "doubao-seedance-2-0-fast-260128",
     "doubao-seedance-2-0-mini-260615",
     "doubao-seedance-2-5-260628",
+    "dreamina-seedance-2-0-260128",
+    "dreamina-seedance-2-0-fast-260128",
+    "dreamina-seedance-2-0-mini-260615",
+    "dreamina-seedance-2-5-260628",
   ],
   fetchMode: "per_task",
   usageSchema: {
@@ -137,7 +141,7 @@ function videoInputRatio(model, resolution, content) {
   const video = hasVideo(content);
   const res = trimmed(resolution).toLowerCase();
   if (model === "doubao-seedance-2-5-260628") {
-    if (res === "1080p") return video ? 7.0 / 10.7 : 11.7 / 10.7;
+    if (res === "1080p") return video ? 46 / 70 : 77 / 70;
     return video ? 42 / 70 : 1;
   }
   if (model === "doubao-seedance-2-0-260128") {
@@ -147,6 +151,17 @@ function videoInputRatio(model, resolution, content) {
   }
   if (model === "doubao-seedance-2-0-fast-260128") return video ? 22 / 37 : 1;
   if (model === "doubao-seedance-2-0-mini-260615") return video ? 14 / 23 : 1;
+  if (model === "dreamina-seedance-2-5-260628") {
+    if (res === "1080p") return video ? 7.0 / 10.7 : 11.7 / 10.7;
+    return video ? 6.4 / 10.7 : 1;
+  }
+  if (model === "dreamina-seedance-2-0-260128") {
+    if (res === "1080p") return video ? 4.7 / 7.0 : 7.7 / 7.0;
+    if (res === "4k") return video ? 2.4 / 7.0 : 4.0 / 7.0;
+    return video ? 4.3 / 7.0 : 1;
+  }
+  if (model === "dreamina-seedance-2-0-fast-260128") return video ? 3.3 / 5.6 : 1;
+  if (model === "dreamina-seedance-2-0-mini-260615") return video ? 2.1 / 3.5 : 1;
   return 1;
 }
 
@@ -279,7 +294,7 @@ export function extractUsage(ctx) {
   const req = ctx.requestBody || {};
   const metadata = req.metadata || {};
   if (ctx.usagePurpose === "billing_ratios") {
-    const ratio = videoInputRatio(ctx.upstreamModel || ctx.model, metadata.resolution, metadata.content);
+    const ratio = videoInputRatio(ctx.model || ctx.upstreamModel, metadata.resolution, metadata.content);
     return ratio === 1 ? null : { video_input_ratio: ratio };
   }
   let seconds = Number(req.seconds || req.duration || metadata.duration || 0);
