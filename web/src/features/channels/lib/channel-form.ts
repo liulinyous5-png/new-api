@@ -29,6 +29,7 @@ import {
   OPENAI_FIELD_PASSTHROUGH_TYPES,
 } from '../constants'
 import type { Channel } from '../types'
+import { parseAccountCredentials } from './account-credentials'
 import {
   CHANNEL_TYPE_ADVANCED_CUSTOM,
   advancedCustomConfigUsesRelativeUpstreamPath,
@@ -202,6 +203,8 @@ export const channelFormSchema = z
     name: z.string().min(1, ERROR_MESSAGES.REQUIRED_NAME),
     type: z.number().min(0, ERROR_MESSAGES.REQUIRED_TYPE),
     base_url: z.string().optional(),
+    is_editing: z.boolean().optional(),
+    account_credentials: z.boolean().optional(),
     task_plugin_key: z.string().optional(),
     key: z.string(),
     openai_organization: z.string().optional(),
@@ -286,11 +289,30 @@ export const channelFormSchema = z
     upstream_model_update_ignored_models: z.string().optional(),
   })
   .superRefine((data, ctx) => {
+    let hasAccountURLs = false
+    if (
+      data.account_credentials &&
+      (data.type === 1 || data.type === 3) &&
+      data.key?.trim()
+    ) {
+      try {
+        const accounts = parseAccountCredentials(data.key)
+        hasAccountURLs =
+          accounts.length > 0 && accounts.every((account) => !!account.base_url)
+      } catch {
+        addRequiredIssue(ctx, 'key', 'Invalid account list')
+      }
+    }
     if (
       [3, 8, 36, 45, CHANNEL_TYPE_NEW_API, CHANNEL_TYPE_TASK_PLUGIN].includes(
         data.type
       ) &&
-      !data.base_url?.trim()
+      !data.base_url?.trim() &&
+      !(
+        data.type === 3 &&
+        data.account_credentials &&
+        (hasAccountURLs || (data.is_editing && !data.key?.trim()))
+      )
     ) {
       addRequiredIssue(
         ctx,
@@ -413,6 +435,7 @@ export type ChannelFormValues = z.infer<typeof channelFormSchema>
 
 export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   name: '',
+  account_credentials: false,
   type: 1,
   base_url: '',
   task_plugin_key: '',
@@ -588,6 +611,8 @@ export function transformChannelToFormDefaults(
     settings: channel.settings || '{}',
     other: channel.other || '',
     multi_key_mode: 'single',
+    is_editing: true,
+    account_credentials: channel.channel_info.account_credentials ?? false,
     multi_key_type: channel.channel_info.multi_key_mode || 'random',
     batch_add_set_key_prefix_2_name: false,
     key_mode: 'append', // Default to append mode for editing multi-key channels
@@ -794,6 +819,7 @@ function normalizeBaseUrl(value: string | undefined): string {
  */
 export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
   mode: 'single' | 'batch' | 'multi_to_single'
+  account_credentials?: boolean
   multi_key_mode?: 'random' | 'polling'
   batch_add_set_key_prefix_2_name?: boolean
   channel: Partial<Channel>
@@ -833,6 +859,7 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
 
   return {
     mode,
+    account_credentials: formData.account_credentials,
     multi_key_mode:
       mode === 'multi_to_single' ? formData.multi_key_type : undefined,
     batch_add_set_key_prefix_2_name:
@@ -850,6 +877,7 @@ export function transformFormDataToUpdatePayload(
 ): Partial<Channel> {
   const payload: Partial<Channel> = {
     id: channelId,
+    account_credentials: formData.account_credentials,
     name: formData.name,
     type: formData.type,
     base_url: normalizeBaseUrl(formData.base_url) || null,

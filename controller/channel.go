@@ -587,6 +587,7 @@ func RefreshCodexChannelCredential(c *gin.Context) {
 }
 
 type AddChannelRequest struct {
+	AccountCredentials        bool                  `json:"account_credentials"`
 	Mode                      string                `json:"mode"`
 	MultiKeyMode              constant.MultiKeyMode `json:"multi_key_mode"`
 	BatchAddSetKeyPrefix2Name bool                  `json:"batch_add_set_key_prefix_2_name"`
@@ -651,6 +652,19 @@ func AddChannel(c *gin.Context) {
 		return
 	}
 
+	addChannelRequest.Channel.ChannelInfo.AccountCredentials = addChannelRequest.AccountCredentials
+	if err := addChannelRequest.Channel.NormalizeAccountCredentials(); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := addChannelRequest.Channel.ValidateAccountEndpoints(); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if addChannelRequest.Mode == "single" && addChannelRequest.Channel.UsesAccountCredentials() && strings.Contains(addChannelRequest.Channel.Key, "\n") {
+		common.ApiError(c, fmt.Errorf("multiple accounts require batch or aggregation mode"))
+		return
+	}
 	addChannelRequest.Channel.CreatedTime = common.GetTimestamp()
 	keys := make([]string, 0)
 	switch addChannelRequest.Mode {
@@ -953,6 +967,7 @@ func DeleteChannelBatch(c *gin.Context) {
 }
 
 type PatchChannel struct {
+	AccountCredentials *bool `json:"account_credentials"`
 	model.Channel
 	MultiKeyMode *string `json:"multi_key_mode"`
 	KeyMode      *string `json:"key_mode"` // 多key模式下密钥覆盖或者追加
@@ -1030,6 +1045,23 @@ func UpdateChannel(c *gin.Context) {
 		!authz.Can(c.GetInt("id"), c.GetInt("role"), authz.ChannelSensitiveWrite) {
 		common.ApiErrorI18n(c, i18n.MsgAuthInsufficientPrivilege)
 		return
+	}
+
+	if channel.AccountCredentials != nil {
+		channel.ChannelInfo.AccountCredentials = *channel.AccountCredentials
+	}
+	if channel.ChannelInfo.AccountCredentials || originChannel.ChannelInfo.AccountCredentials {
+		if _, provided := requestData["type"]; !provided {
+			channel.Type = originChannel.Type
+		}
+		if !channel.ChannelInfo.AccountCredentials && (channel.Key == "" || (channel.KeyMode != nil && *channel.KeyMode == "append")) {
+			common.ApiError(c, fmt.Errorf("disabling account credentials requires replacement keys"))
+			return
+		}
+		if err := channel.NormalizeAccountCredentials(); err != nil {
+			common.ApiError(c, err)
+			return
+		}
 	}
 
 	// If the request explicitly specifies a new MultiKeyMode, apply it on top of the original info.
@@ -1117,6 +1149,31 @@ func UpdateChannel(c *gin.Context) {
 			// 覆盖模式：直接使用新密钥（默认行为，不需要特殊处理）
 		}
 	}
+	if (channel.UsesAccountCredentials() || originChannel.UsesAccountCredentials()) && channel.ChannelInfo.IsMultiKey && channel.Key != "" && (channel.KeyMode == nil || *channel.KeyMode != "append") {
+		channel.ChannelInfo.MultiKeyStatusList = nil
+		channel.ChannelInfo.MultiKeyDisabledReason = nil
+		channel.ChannelInfo.MultiKeyDisabledTime = nil
+		channel.ChannelInfo.MultiKeyPollingIndex = 0
+	}
+
+	if channel.UsesAccountCredentials() && !channel.ChannelInfo.IsMultiKey && strings.Contains(channel.Key, "\n") {
+		common.ApiError(c, fmt.Errorf("multiple accounts require an aggregation channel"))
+		return
+	}
+	if channel.UsesAccountCredentials() {
+		validationChannel := channel.Channel
+		if validationChannel.Key == "" {
+			validationChannel.Key = originChannel.Key
+		}
+		if _, provided := requestData["base_url"]; !provided {
+			validationChannel.BaseURL = originChannel.BaseURL
+		}
+		if err := validationChannel.ValidateAccountEndpoints(); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
+
 	err = channel.Update()
 	if err != nil {
 		common.ApiError(c, err)
@@ -1228,13 +1285,14 @@ func equalStringPtr(a, b *string) bool {
 }
 
 type fetchModelsRequest struct {
-	ChannelID      int     `json:"channel_id"`
-	BaseURL        *string `json:"base_url"`
-	Type           int     `json:"type"`
-	Key            string  `json:"key"`
-	AdvancedCustom *string `json:"advanced_custom"`
-	HeaderOverride *string `json:"header_override"`
-	Proxy          *string `json:"proxy"`
+	AccountCredentials bool    `json:"account_credentials"`
+	ChannelID          int     `json:"channel_id"`
+	BaseURL            *string `json:"base_url"`
+	Type               int     `json:"type"`
+	Key                string  `json:"key"`
+	AdvancedCustom     *string `json:"advanced_custom"`
+	HeaderOverride     *string `json:"header_override"`
+	Proxy              *string `json:"proxy"`
 }
 
 func buildAdvancedCustomModelPreviewChannel(req fetchModelsRequest) (*model.Channel, error) {
@@ -1337,16 +1395,24 @@ func FetchModels(c *gin.Context) {
 		}
 
 		key := strings.TrimSpace(req.Key)
-		if req.Type != constant.ChannelTypeCodex {
+		if req.Type != constant.ChannelTypeCodex && !req.AccountCredentials {
 			key = strings.Split(key, "\n")[0]
 		}
 		channel = &model.Channel{
-			Type:    req.Type,
-			Key:     key,
-			BaseURL: &baseURL,
+			Type:        req.Type,
+			Key:         key,
+			BaseURL:     &baseURL,
+			ChannelInfo: model.ChannelInfo{AccountCredentials: req.AccountCredentials},
 		}
 	}
 
+	if channel.UsesAccountCredentials() {
+		if err := channel.NormalizeAccountCredentials(); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		channel.Key = strings.Split(channel.Key, "\n")[0]
+	}
 	models, err := fetchChannelUpstreamModelIDs(channel)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -1526,6 +1592,7 @@ type KeyStatus struct {
 	Status       int    `json:"status"` // 1: enabled, 2: disabled
 	DisabledTime int64  `json:"disabled_time,omitempty"`
 	Reason       string `json:"reason,omitempty"`
+	BaseURL      string `json:"base_url,omitempty"`
 	KeyPreview   string `json:"key_preview"` // first 10 chars of key for identification
 }
 
@@ -1624,9 +1691,20 @@ func ManageMultiKeys(c *gin.Context) {
 			}
 
 			// Create key preview (first 10 chars)
-			keyPreview := key
-			if len(key) > 10 {
-				keyPreview = key[:10] + "..."
+			credential, credentialErr := channel.ResolveCredential(key)
+			keyPreview := ""
+			baseURL := ""
+			if channel.UsesAccountCredentials() {
+				baseURL = channel.GetBaseURL()
+			}
+			if credentialErr == nil {
+				keyPreview = credential.Key
+				if len(keyPreview) > 10 {
+					keyPreview = keyPreview[:10] + "..."
+				}
+				if credential.BaseURL != "" {
+					baseURL = credential.BaseURL
+				}
 			}
 
 			allKeyStatusList = append(allKeyStatusList, KeyStatus{
@@ -1635,6 +1713,7 @@ func ManageMultiKeys(c *gin.Context) {
 				DisabledTime: disabledTime,
 				Reason:       reason,
 				KeyPreview:   keyPreview,
+				BaseURL:      baseURL,
 			})
 		}
 

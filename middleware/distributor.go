@@ -576,7 +576,7 @@ func getTaskOriginModelName(c *gin.Context) string {
 	return ""
 }
 
-func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string) *types.NewAPIError {
+func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string, testKeyIndex ...int) *types.NewAPIError {
 	c.Set("original_model", modelName) // for retry
 	expectedPlugin := c.GetString("expected_task_plugin_key")
 	if channel == nil {
@@ -640,9 +640,21 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	common.SetContextKey(c, constant.ContextKeyChannelModelMapping, channel.GetModelMapping())
 	common.SetContextKey(c, constant.ContextKeyChannelStatusCodeMapping, channel.GetStatusCodeMapping())
 
-	key, index, newAPIError := channel.GetNextEnabledKey()
-	if newAPIError != nil {
-		return newAPIError
+	var key string
+	var index int
+	if len(testKeyIndex) > 0 {
+		index = testKeyIndex[0]
+		keys := channel.GetKeys()
+		if !channel.ChannelInfo.IsMultiKey || index < 0 || index >= len(keys) {
+			return types.NewError(errors.New("account index out of range"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
+		key = keys[index]
+	} else {
+		var newAPIError *types.NewAPIError
+		key, index, newAPIError = channel.GetNextEnabledKey()
+		if newAPIError != nil {
+			return newAPIError
+		}
 	}
 	if channel.ChannelInfo.IsMultiKey {
 		common.SetContextKey(c, constant.ContextKeyChannelIsMultiKey, true)
@@ -652,8 +664,17 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 		common.SetContextKey(c, constant.ContextKeyChannelIsMultiKey, false)
 	}
 	// c.Request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", key))
-	common.SetContextKey(c, constant.ContextKeyChannelKey, key)
-	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, channel.GetBaseURL())
+	credential, credentialErr := channel.ResolveCredential(key)
+	if credentialErr != nil {
+		return types.NewError(credentialErr, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
+	baseURL := channel.GetBaseURL()
+	if credential.BaseURL != "" {
+		baseURL = credential.BaseURL
+	}
+	common.SetContextKey(c, constant.ContextKeyChannelCredential, key)
+	common.SetContextKey(c, constant.ContextKeyChannelKey, credential.Key)
+	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, baseURL)
 
 	common.SetContextKey(c, constant.ContextKeySystemPromptOverride, false)
 

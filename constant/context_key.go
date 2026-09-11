@@ -39,6 +39,7 @@ const (
 	ContextKeyChannelIsMultiKey        ContextKey = "channel_is_multi_key"
 	ContextKeyChannelMultiKeyIndex     ContextKey = "channel_multi_key_index"
 	ContextKeyChannelKey               ContextKey = "channel_key"
+	ContextKeyChannelCredential        ContextKey = "channel_credential"
 
 	ContextKeyAutoGroup           ContextKey = "auto_group"
 	ContextKeyAutoGroupIndex      ContextKey = "auto_group_index"

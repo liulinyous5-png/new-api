@@ -26,6 +26,8 @@ type MultiKeyTableRowActionsProps = {
   keyIndex: number
   status: number
   canDelete: boolean
+  testing?: boolean
+  onTest?: () => void
   onAction: (action: MultiKeyConfirmAction) => void
 }
 
@@ -33,6 +35,8 @@ export function MultiKeyTableRowActions({
   keyIndex,
   status,
   canDelete,
+  testing,
+  onTest,
   onAction,
 }: MultiKeyTableRowActionsProps) {
   const { t } = useTranslation()
@@ -40,6 +44,11 @@ export function MultiKeyTableRowActions({
 
   return (
     <div className='flex justify-end gap-2'>
+      {onTest && (
+        <Button variant='outline' size='sm' onClick={onTest} disabled={testing}>
+          {testing ? t('Testing...') : t('Test')}
+        </Button>
+      )}
       {isEnabled ? (
         <Button
           variant='outline'

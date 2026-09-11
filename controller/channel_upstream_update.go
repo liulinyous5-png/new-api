@@ -362,6 +362,25 @@ func getFetchModelsResponseBody(method string, requestURL string, channel *model
 }
 
 func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
+	if channel.UsesAccountCredentials() {
+		entry, _, apiErr := channel.GetNextEnabledKey()
+		if apiErr != nil {
+			return nil, apiErr
+		}
+		credential, err := channel.ResolveCredential(entry)
+		if err != nil {
+			return nil, err
+		}
+		selected := *channel
+		selected.Key = credential.Key
+		selected.Keys = nil
+		selected.ChannelInfo.IsMultiKey = false
+		if credential.BaseURL != "" {
+			selected.BaseURL = &credential.BaseURL
+		}
+		channel = &selected
+	}
+
 	if channel.Type == constant.ChannelTypeTaskPlugin {
 		plugin, ok := jsplugin.DefaultRegistry.Get(channel.GetSetting().TaskPluginKey)
 		if !ok {

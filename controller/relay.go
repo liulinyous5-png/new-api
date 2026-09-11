@@ -241,7 +241,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
 
-		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetChannelCredentialIdentity(c), channel.GetAutoBan()), newAPIError)
 
 		remainingRetry := common.RetryTimes - retryParam.GetRetry()
 		if !shouldRetry(c, newAPIError, remainingRetry) {
@@ -455,7 +455,7 @@ func tryGroupFallbackAfterRetryExhausted(
 			fallbackChannel.Type,
 			fallbackChannel.Name,
 			fallbackChannel.ChannelInfo.IsMultiKey,
-			common.GetContextKeyString(c, constant.ContextKeyChannelKey),
+			common.GetChannelCredentialIdentity(c),
 			fallbackChannel.GetAutoBan(),
 		),
 		newAPIError,
@@ -812,7 +812,7 @@ func executeTaskSubmissionWith(
 		if !taskErr.LocalError {
 			processChannelError(c,
 				*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey,
-					common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()),
+					common.GetChannelCredentialIdentity(c), channel.GetAutoBan()),
 				types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode))
 		}
 

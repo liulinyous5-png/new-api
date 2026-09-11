@@ -99,6 +99,7 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 		if newAPIError != nil {
 			return service.TaskErrorWrapper(newAPIError, "channel_no_available_key", newAPIError.StatusCode)
 		}
+		common.SetContextKey(c, constant.ContextKeyChannelCredential, key)
 		common.SetContextKey(c, constant.ContextKeyChannelKey, key)
 		common.SetContextKey(c, constant.ContextKeyChannelType, ch.Type)
 		common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, ch.GetBaseURL())

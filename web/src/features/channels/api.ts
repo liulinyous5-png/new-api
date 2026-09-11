@@ -222,7 +222,12 @@ export async function batchSetChannelTag(
  */
 export async function testChannel(
   id: number,
-  params?: { model?: string; endpoint_type?: string; stream?: boolean }
+  params?: {
+    model?: string
+    endpoint_type?: string
+    stream?: boolean
+    key_index?: number
+  }
 ): Promise<ChannelTestResponse> {
   const res = await api.get(
     `/api/channel/test/${id}`,
@@ -537,6 +542,7 @@ export async function getTagModels(
  * Fetch models from the current unsaved channel form configuration.
  */
 export async function fetchModels(data: {
+  account_credentials?: boolean
   base_url: string
   type: number
   key?: string

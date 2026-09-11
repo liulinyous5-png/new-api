@@ -382,3 +382,12 @@ func multipartMemoryLimit() int64 {
 	}
 	return int64(limitMB) << 20
 }
+
+// GetChannelCredentialIdentity returns the stored account entry for status
+// updates, distinguishing identical secrets used at different endpoints.
+func GetChannelCredentialIdentity(c *gin.Context) string {
+	if identity := GetContextKeyString(c, constant.ContextKeyChannelCredential); identity != "" {
+		return identity
+	}
+	return GetContextKeyString(c, constant.ContextKeyChannelKey)
+}

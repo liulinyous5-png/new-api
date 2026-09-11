@@ -45,6 +45,7 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import {
   getMultiKeyStatus,
+  testChannel,
   enableMultiKey,
   disableMultiKey,
   deleteMultiKey,
@@ -86,6 +87,7 @@ export function MultiKeyManageDialog({
 
   // Data state
   const [isLoading, setIsLoading] = useState(false)
+  const [testingKey, setTestingKey] = useState<number | null>(null)
   const [keys, setKeys] = useState<KeyStatus[]>([])
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
@@ -100,6 +102,20 @@ export function MultiKeyManageDialog({
   const [confirmAction, setConfirmAction] =
     useState<MultiKeyConfirmAction | null>(null)
   const [isPerformingAction, setIsPerformingAction] = useState(false)
+
+  const handleTestAccount = async (keyIndex: number) => {
+    if (!currentRow || testingKey !== null) return
+    setTestingKey(keyIndex)
+    try {
+      const result = await testChannel(currentRow.id, { key_index: keyIndex })
+      if (result.success) toast.success(t('Account test succeeded'))
+      else toast.error(result.message || t('Test failed'))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('Test failed'))
+    } finally {
+      setTestingKey(null)
+    }
+  }
 
   // Reset and load data when dialog opens
   useEffect(() => {
@@ -149,7 +165,7 @@ export function MultiKeyManageDialog({
   }
 
   const handleStatusFilterChange = (value: string) => {
-    const newFilter = value === 'all' ? null : parseInt(value)
+    const newFilter = value === 'all' ? null : Number.parseInt(value)
     setStatusFilter(newFilter)
     setCurrentPage(1)
     loadKeyStatus(1, pageSize, newFilter)
@@ -294,12 +310,10 @@ export function MultiKeyManageDialog({
           {/* Toolbar */}
           <div className='flex shrink-0 items-center justify-between'>
             <Select
-              items={[
-                ...MULTI_KEY_FILTER_OPTIONS.map((option) => ({
-                  value: option.value,
-                  label: t(option.label),
-                })),
-              ]}
+              items={MULTI_KEY_FILTER_OPTIONS.map((option) => ({
+                value: option.value,
+                label: t(option.label),
+              }))}
               value={statusFilter === null ? 'all' : statusFilter.toString()}
               onValueChange={(v) => v !== null && handleStatusFilterChange(v)}
             >
@@ -378,15 +392,17 @@ export function MultiKeyManageDialog({
 
           {/* Table */}
           <div className='min-h-0 flex-1 overflow-auto rounded-md border'>
-            {isLoading ? (
+            {isLoading && (
               <div className='flex items-center justify-center py-12'>
                 <Loader2 className='text-muted-foreground h-8 w-8 animate-spin' />
               </div>
-            ) : keys.length === 0 ? (
+            )}
+            {!isLoading && keys.length === 0 && (
               <div className='text-muted-foreground py-12 text-center'>
                 {t('No keys found')}
               </div>
-            ) : (
+            )}
+            {!isLoading && keys.length > 0 && (
               <StaticDataTable
                 className='rounded-none border-0'
                 tableClassName='min-w-[800px]'
@@ -406,6 +422,16 @@ export function MultiKeyManageDialog({
                     className: 'w-32',
                     cell: (key) => renderStatusBadge(key.status),
                   },
+                  ...(currentRow?.channel_info.account_credentials
+                    ? [
+                        {
+                          id: 'base-url',
+                          header: t('Base URL'),
+                          cellClassName: 'max-w-xs truncate text-sm',
+                          cell: (key: KeyStatus) => key.base_url || '-',
+                        },
+                      ]
+                    : []),
                   {
                     id: 'reason',
                     header: t('Disabled Reason'),
@@ -426,6 +452,12 @@ export function MultiKeyManageDialog({
                     className: 'text-right',
                     cell: (key) => (
                       <MultiKeyTableRowActions
+                        testing={testingKey !== null}
+                        onTest={
+                          currentRow?.channel_info.account_credentials
+                            ? () => handleTestAccount(key.index)
+                            : undefined
+                        }
                         keyIndex={key.index}
                         status={key.status}
                         canDelete={canEditSensitive}

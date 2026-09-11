@@ -69,7 +69,7 @@ func resolveChannelTestUserID(c *gin.Context) (int, error) {
 	return rootUser.Id, nil
 }
 
-func testChannel(ctx context.Context, channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool) testResult {
+func testChannel(ctx context.Context, channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool, testKeyIndex ...int) testResult {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -168,7 +168,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	group, _ := model.GetUserGroup(testUserID, false)
 	c.Set("group", group)
 
-	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, testModel)
+	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, testModel, testKeyIndex...)
 	if newAPIError != nil {
 		return testResult{
 			context:     c,
@@ -867,7 +867,16 @@ func TestChannel(c *gin.Context) {
 	if c.Request != nil {
 		requestCtx = c.Request.Context()
 	}
-	result := testChannel(requestCtx, channel, testUserID, testModel, endpointType, isStream)
+	var testKeyIndex []int
+	if value, provided := c.GetQuery("key_index"); provided {
+		index, err := strconv.Atoi(value)
+		if err != nil || !channel.ChannelInfo.IsMultiKey || index < 0 || index >= len(channel.GetKeys()) {
+			common.ApiError(c, errors.New("account index out of range"))
+			return
+		}
+		testKeyIndex = []int{index}
+	}
+	result := testChannel(requestCtx, channel, testUserID, testModel, endpointType, isStream, testKeyIndex...)
 	if result.localErr != nil {
 		resp := gin.H{
 			"success": false,
@@ -943,12 +952,12 @@ func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, test
 	}
 
 	if allowDisable && isChannelEnabled && shouldBanChannel && channel.GetAutoBan() {
-		processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+		processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetChannelCredentialIdentity(result.context), channel.GetAutoBan()), newAPIError)
 		summary.Disabled++
 	}
 
 	if result.localErr == nil && !isChannelEnabled && service.ShouldEnableChannel(newAPIError, channel.Status) {
-		service.EnableChannel(channel.Id, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.Name)
+		service.EnableChannel(channel.Id, common.GetChannelCredentialIdentity(result.context), channel.Name)
 		summary.Enabled++
 	}
 

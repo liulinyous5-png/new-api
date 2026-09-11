@@ -23,6 +23,7 @@ import { z } from 'zod'
 // ============================================================================
 
 export const channelInfoSchema = z.object({
+  account_credentials: z.boolean().optional(),
   is_multi_key: z.boolean().default(false),
   multi_key_size: z.number().default(0),
   multi_key_status_list: z.record(z.string(), z.number()).optional(),
@@ -35,6 +36,7 @@ export const channelInfoSchema = z.object({
 export type ChannelInfo = z.infer<typeof channelInfoSchema>
 
 export const channelSchema = z.object({
+  account_credentials: z.boolean().optional(),
   id: z.number(),
   type: z.number(),
   key: z.string(),
@@ -224,6 +226,7 @@ export interface KeyStatus {
   disabled_time?: number
   reason?: string
   key_preview?: string
+  base_url?: string
 }
 
 export type MultiKeyConfirmAction = {
@@ -373,6 +376,7 @@ export interface ChannelFormData {
 // ============================================================================
 
 export interface AddChannelRequest {
+  account_credentials?: boolean
   mode: 'single' | 'batch' | 'multi_to_single'
   multi_key_mode?: 'random' | 'polling'
   batch_add_set_key_prefix_2_name?: boolean

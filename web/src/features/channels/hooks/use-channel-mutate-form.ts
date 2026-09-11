@@ -44,6 +44,7 @@ type UseChannelMutateFormParams = {
 }
 
 const SENSITIVE_UPDATE_FIELDS = [
+  'account_credentials',
   'type',
   'key',
   'base_url',

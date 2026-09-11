@@ -60,6 +60,7 @@ type Channel struct {
 }
 
 type ChannelInfo struct {
+	AccountCredentials     bool                  `json:"account_credentials,omitempty"`
 	IsMultiKey             bool                  `json:"is_multi_key"`                        // 是否多Key模式
 	MultiKeySize           int                   `json:"multi_key_size"`                      // 多Key模式下的Key数量
 	MultiKeyStatusList     map[int]int           `json:"multi_key_status_list"`               // key状态列表，key index -> status
@@ -276,6 +277,9 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 			if getStatus(idx) == common.ChannelStatusEnabled {
 				// update polling index for next call (point to the next position)
 				channel.ChannelInfo.MultiKeyPollingIndex = (idx + 1) % len(keys)
+				if channel.UsesAccountCredentials() {
+					channelInfo.MultiKeyPollingIndex = channel.ChannelInfo.MultiKeyPollingIndex
+				}
 				return keys[idx], idx, nil
 			}
 		}

@@ -463,6 +463,19 @@ func updateChannelBalance(channel *model.Channel) (channelBalanceResult, error) 
 }
 
 func updateStandardChannelBalance(channel *model.Channel) (float64, error) {
+	if channel.UsesAccountCredentials() {
+		credential, err := channel.ResolveCredential(channel.Key)
+		if err != nil {
+			return 0, err
+		}
+		selected := *channel
+		selected.Key = credential.Key
+		if credential.BaseURL != "" {
+			selected.BaseURL = &credential.BaseURL
+		}
+		channel = &selected
+	}
+
 	baseURL := constant.GetChannelBaseURL(channel.Type)
 	if channel.GetBaseURL() == "" {
 		channel.BaseURL = &baseURL

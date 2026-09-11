@@ -173,11 +173,14 @@ import {
   validateModelMappingJson,
   hasAdvancedSettingsErrors,
 } from '../../lib'
+import { parseAccountCredentials } from '../../lib/account-credentials'
 import {
   collectInvalidStatusCodeEntries,
   collectNewDisallowedStatusCodeRedirects,
 } from '../../lib/status-code-risk-guard'
 import type { Channel } from '../../types'
+import { AccountCredentialsField } from '../account-credentials-field'
+import { AccountCredentialsHelp } from '../account-credentials-help'
 import { useChannels } from '../channels-provider'
 import { AdvancedCustomEditorDialog } from '../dialogs/advanced-custom-editor-dialog'
 import { FetchModelsDialog } from '../dialogs/fetch-models-dialog'
@@ -272,6 +275,7 @@ const ADVANCED_SETTINGS_CHILD_SECTION_IDS: string[] = Object.values(
 const ADVANCED_CUSTOM_ROUTE_TYPE_PREVIEW_LIMIT = 3
 const UPSTREAM_DETECTED_MODEL_PREVIEW_LIMIT = 8
 const SENSITIVE_FORM_FIELDS = [
+  'account_credentials',
   'type',
   'base_url',
   'key',
@@ -1353,7 +1357,21 @@ export function ChannelMutateDrawer({
       return
     }
 
-    const result = deduplicateKeys(currentKey)
+    let input = currentKey
+    if (
+      form.getValues('account_credentials') &&
+      (currentType === 1 || currentType === 3)
+    ) {
+      try {
+        input = parseAccountCredentials(currentKey)
+          .map((account) => JSON.stringify(account))
+          .join('\n')
+      } catch {
+        toast.error(t('Invalid account list'))
+        return
+      }
+    }
+    const result = deduplicateKeys(input)
 
     if (result.removedCount === 0) {
       toast.info(t('No duplicate keys found'))
@@ -1484,6 +1502,7 @@ export function ChannelMutateDrawer({
     }
     const response = await fetchModels({
       type,
+      account_credentials: form.getValues('account_credentials'),
       key: isEditing ? undefined : form.getValues('key'),
       channel_id: editingAdvancedCustom ? channelId || undefined : undefined,
       base_url: form.getValues('base_url') || '',
@@ -3012,6 +3031,13 @@ export function ChannelMutateDrawer({
                                 />
                               )}
 
+                              {(currentType === 1 || currentType === 3) && (
+                                <AccountCredentialsField
+                                  control={form.control}
+                                  disabled={sensitiveLocked}
+                                />
+                              )}
+
                               <FormField
                                 control={form.control}
                                 name='key'
@@ -3111,6 +3137,10 @@ export function ChannelMutateDrawer({
                                           )}
                                         </div>
                                       </FormDescription>
+                                      {(currentType === 1 ||
+                                        currentType === 3) && (
+                                        <AccountCredentialsHelp />
+                                      )}
                                       {isEditing && canRevealChannelKey && (
                                         <div className='border-border/60 mt-4 flex flex-col gap-3 border-y border-dashed py-4'>
                                           <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
