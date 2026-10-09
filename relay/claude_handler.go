@@ -85,22 +85,6 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		return nil
 	}
 
-	var requestBody io.Reader
-	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
-		storage, err := common.GetBodyStorage(c)
-		if err != nil {
-			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
-		}
-		requestBody = common.NewReplayableBodyReader(storage)
-	} else {
-		convertedRequest, err := adaptor.ConvertClaudeRequest(c, info, request)
-		if err != nil {
-			return newConvertRequestFailedError(c, info, err)
-		}
-		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
-		jsonData, err := common.Marshal(convertedRequest)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	statusCodeMappingStr := c.GetString("status_code_mapping")
 
 	buildRequestBody := func(forceMarshalFromRequest bool) (io.Reader, func(), *types.NewAPIError) {
@@ -118,7 +102,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		} else {
 			convertedRequest, convErr := adaptor.ConvertClaudeRequest(c, info, request)
 			if convErr != nil {
-				return nil, nil, types.NewError(convErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+				return nil, nil, newConvertRequestFailedError(c, info, convErr)
 			}
 			relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
 			outboundRequest = convertedRequest

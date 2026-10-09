@@ -132,7 +132,7 @@ func buildTTFTAlertContent(
 		count,
 		frtMs/1000.0,
 		params.UseTimeSeconds,
-		params.Other["request_path"],
+		params.Other.Snapshot()["request_path"],
 		requestID,
 		upstreamRequestID,
 		time.Now().Format("2006-01-02 15:04:05"),
@@ -148,8 +148,11 @@ func isTTFTMonitorChannel(channelIDs []int, channelID int) bool {
 	return false
 }
 
-func getFRTMs(other map[string]interface{}) (float64, bool) {
-	raw, ok := other["frt"]
+func getFRTMs(other *model.LogOther) (float64, bool) {
+	if other == nil {
+		return 0, false
+	}
+	raw, ok := other.Snapshot()["frt"]
 	if !ok || raw == nil {
 		return 0, false
 	}

@@ -26,6 +26,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
+	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -212,6 +213,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetChannelCredentialIdentity(c), channel.GetAutoBan()), newAPIError, relayInfo)
 
 		if decision.Action != "retry" {
+			retryExhausted = common.RetryTimes-retryParam.GetRetry() <= 0
 			break
 		}
 	}
@@ -308,6 +310,41 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError, relayInfo *relaycommon.RelayInfo) {
 	service.ProcessChannelError(c, channelError, err, relayInfo)
+	if err == nil || !types.IsRecordErrorLog(err) {
+		return
+	}
+
+	requestPath := ""
+	if c.Request != nil && c.Request.URL != nil {
+		requestPath = c.Request.URL.Path
+	}
+	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
+	if startTime.IsZero() {
+		startTime = time.Now()
+	}
+	alertPayload := service.ErrorLogAlertPayload{
+		UserID:            c.GetInt("id"),
+		Username:          c.GetString("username"),
+		Group:             c.GetString("group"),
+		ModelName:         c.GetString("original_model"),
+		TokenName:         c.GetString("token_name"),
+		ChannelID:         channelError.ChannelId,
+		ChannelName:       channelError.ChannelName,
+		ChannelType:       channelError.ChannelType,
+		StatusCode:        err.StatusCode,
+		ErrorCode:         string(err.GetErrorCode()),
+		ErrorType:         string(err.GetErrorType()),
+		ErrorMessage:      err.MaskSensitiveErrorWithStatusCode(),
+		RequestPath:       requestPath,
+		RequestID:         c.GetString(common.RequestIdKey),
+		UpstreamRequestID: c.GetString(common.UpstreamRequestIdKey),
+		UseTimeSeconds:    int(time.Since(startTime).Seconds()),
+		IsStream:          common.GetContextKeyBool(c, constant.ContextKeyIsStream),
+		RetryChain:        append([]string(nil), c.GetStringSlice("use_channel")...),
+	}
+	gopool.Go(func() {
+		service.HandleErrorLogWebhookAlert(alertPayload)
+	})
 }
 
 func tryGroupFallbackAfterRetryExhausted(
@@ -356,7 +393,7 @@ func tryGroupFallbackAfterRetryExhausted(
 	if setupErr := middleware.SetupContextForSelectedChannel(c, fallbackChannel, relayInfo.OriginModelName); setupErr != nil {
 		return true, setupErr
 	}
-	addUsedChannel(c, fallbackChannel.Id)
+	service.AppendUsedChannel(c, fallbackChannel.Id)
 	if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
 		return true, billingErr
 	}
@@ -392,6 +429,7 @@ func tryGroupFallbackAfterRetryExhausted(
 			fallbackChannel.GetAutoBan(),
 		),
 		newAPIError,
+		relayInfo,
 	)
 	logger.LogWarn(c, fmt.Sprintf(
 		"group fallback failed: group=%s, channel_type=%d, fallback_channel_id=%d, err=%s",
@@ -411,94 +449,6 @@ func runRelayOnceWithCurrentContext(c *gin.Context, info *relaycommon.RelayInfo,
 	default:
 		return relayHandler(c, info)
 	}
-}
-
-func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
-	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.Error())))
-	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
-	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
-	if service.ShouldDisableChannel(err) && channelError.AutoBan {
-		gopool.Go(func() {
-			service.DisableChannel(channelError, err.ErrorWithStatusCode())
-		})
-	}
-
-	if constant.ErrorLogEnabled && types.IsRecordErrorLog(err) {
-		// 保存错误日志到mysql中
-		userId := c.GetInt("id")
-		tokenName := c.GetString("token_name")
-		modelName := c.GetString("original_model")
-		tokenId := c.GetInt("token_id")
-		userGroup := c.GetString("group")
-		channelId := c.GetInt("channel_id")
-		other := make(map[string]interface{})
-		if c.Request != nil && c.Request.URL != nil {
-			other["request_path"] = c.Request.URL.Path
-		}
-		other["error_type"] = err.GetErrorType()
-		other["error_code"] = err.GetErrorCode()
-		other["status_code"] = err.StatusCode
-		other["channel_id"] = channelId
-		other["channel_name"] = c.GetString("channel_name")
-		other["channel_type"] = c.GetInt("channel_type")
-		adminInfo := make(map[string]interface{})
-		adminInfo["use_channel"] = c.GetStringSlice("use_channel")
-		isMultiKey := common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey)
-		if isMultiKey {
-			adminInfo["is_multi_key"] = true
-			adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
-		}
-		service.AppendChannelAffinityAdminInfo(c, adminInfo)
-		other["admin_info"] = adminInfo
-		service.AppendTaskPluginContextAuditInfo(c, other)
-		startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
-		if startTime.IsZero() {
-			startTime = time.Now()
-		}
-		useTimeSeconds := int(time.Since(startTime).Seconds())
-		model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
-	}
-
-	if types.IsRecordErrorLog(err) {
-		userId := c.GetInt("id")
-		tokenName := c.GetString("token_name")
-		modelName := c.GetString("original_model")
-		userGroup := c.GetString("group")
-		channelId := c.GetInt("channel_id")
-		requestPath := ""
-		if c.Request != nil && c.Request.URL != nil {
-			requestPath = c.Request.URL.Path
-		}
-		startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
-		if startTime.IsZero() {
-			startTime = time.Now()
-		}
-		useTimeSeconds := int(time.Since(startTime).Seconds())
-		alertPayload := service.ErrorLogAlertPayload{
-			UserID:            userId,
-			Username:          c.GetString("username"),
-			Group:             userGroup,
-			ModelName:         modelName,
-			TokenName:         tokenName,
-			ChannelID:         channelId,
-			ChannelName:       c.GetString("channel_name"),
-			ChannelType:       c.GetInt("channel_type"),
-			StatusCode:        err.StatusCode,
-			ErrorCode:         string(err.GetErrorCode()),
-			ErrorType:         string(err.GetErrorType()),
-			ErrorMessage:      err.MaskSensitiveErrorWithStatusCode(),
-			RequestPath:       requestPath,
-			RequestID:         c.GetString(common.RequestIdKey),
-			UpstreamRequestID: c.GetString(common.UpstreamRequestIdKey),
-			UseTimeSeconds:    useTimeSeconds,
-			IsStream:          common.GetContextKeyBool(c, constant.ContextKeyIsStream),
-			RetryChain:        c.GetStringSlice("use_channel"),
-		}
-		gopool.Go(func() {
-			service.HandleErrorLogWebhookAlert(alertPayload)
-		})
-	}
-
 }
 
 func RelayMidjourney(c *gin.Context) {
@@ -767,7 +717,8 @@ func executeTaskSubmissionWith(
 			processChannelError(c,
 				*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey,
 					common.GetChannelCredentialIdentity(c), channel.GetAutoBan()),
-				types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode))
+				taskAPIError,
+				relayInfo)
 		}
 
 		willRetry := decision.Action == "retry"

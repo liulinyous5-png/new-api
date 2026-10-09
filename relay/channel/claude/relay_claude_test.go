@@ -1,8 +1,8 @@
 package claude
 
 import (
-	"net/http/httptest"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -11,8 +11,6 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
-	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
-	"github.com/gin-gonic/gin"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/tokenkit"
 	"github.com/gin-gonic/gin"
@@ -25,7 +23,7 @@ func TestHandleStreamResponseDataForwardsClaudeErrorEvent(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
-	info := &relaycommon.RelayInfo{RelayFormat: relaytypes.RelayFormatClaude}
+	info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatClaude}
 	claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
 	data := `{"type":"error","error":{"type":"invalid_request_error","message":"Provider returned no content"},"provider_meta":{"trace_id":"trace_123"}}`
 

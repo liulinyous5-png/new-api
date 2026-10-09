@@ -4291,7 +4291,7 @@ export function ChannelMutateDrawer({
                   )}
                 />
               )}
-                                 {(currentType === 1 || currentType === 3) && (
+                                                     {(currentType === 1 || currentType === 3) && (
                                 <AccountCredentialsField
                                   control={form.control}
                                   disabled={sensitiveLocked}
