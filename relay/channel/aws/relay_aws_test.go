@@ -182,6 +182,36 @@ func TestDoAwsClientRequest_AppliesRuntimeHeaderOverrideToAnthropicBeta(t *testi
 	require.Equal(t, []any{"computer-use-2025-01-24"}, values)
 }
 
+func TestDoAwsClientRequest_PreservesTopLevelCacheControl(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "claude-3-5-sonnet-20240620",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ApiKey:            "access-key|secret-key|us-east-1",
+			UpstreamModelName: "claude-3-5-sonnet-20240620",
+		},
+	}
+
+	requestBody := bytes.NewBufferString(`{"messages":[{"role":"user","content":"hello"}],"max_tokens":128,"cache_control":{"type":"ephemeral"}}`)
+	adaptor := &Adaptor{}
+
+	_, err := doAwsClientRequest(ctx, info, adaptor, requestBody)
+	require.NoError(t, err)
+
+	awsReq, ok := adaptor.AwsReq.(*bedrockruntime.InvokeModelInput)
+	require.True(t, ok)
+
+	var payload map[string]any
+	require.NoError(t, common.Unmarshal(awsReq.Body, &payload))
+	require.Equal(t, map[string]any{"type": "ephemeral"}, payload["cache_control"])
+}
+
 func TestNewAwsInvokeContextInheritsParent(t *testing.T) {
 	originalRelayTimeout := common.RelayTimeout
 	t.Cleanup(func() {
