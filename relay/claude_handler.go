@@ -157,7 +157,12 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 			if attempt == 0 {
-				changed := service.FixClaudeRequestOnFirstRetry(request, httpResp.StatusCode, newAPIError.Error())
+				changed := service.FixClaudeRequestOnFirstRetry(
+					request,
+					httpResp.StatusCode,
+					newAPIError.Error(),
+					model_setting.GetClaudeSettings().ThinkingSignatureSelfHealEnabled,
+				)
 				if changed > 0 {
 					logger.LogInfo(c, fmt.Sprintf("retry claude request after self-heal, changed_count=%d", changed))
 					continue

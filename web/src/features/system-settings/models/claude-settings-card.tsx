@@ -76,6 +76,7 @@ const schema = z.object({
       .number()
       .min(0.1, { message: 'Must be at least 0.1' })
       .max(1, { message: 'Must be 1 or less' }),
+    thinking_signature_self_heal_enabled: z.boolean(),
   }),
 })
 
@@ -87,6 +88,7 @@ type FlatClaudeSettings = {
   'claude.default_max_tokens': string
   'claude.thinking_adapter_enabled': boolean
   'claude.thinking_adapter_budget_tokens_percentage': number
+  'claude.thinking_signature_self_heal_enabled': boolean
 }
 
 type ClaudeSettingsCardProps = {
@@ -108,6 +110,8 @@ export function ClaudeSettingsCard({ defaultValues }: ClaudeSettingsCardProps) {
     'claude.thinking_adapter_budget_tokens_percentage': Number(
       defaultValues.claude.thinking_adapter_budget_tokens_percentage
     ),
+    'claude.thinking_signature_self_heal_enabled':
+      defaultValues.claude.thinking_signature_self_heal_enabled,
   })
 
   const buildFormDefaults = (
@@ -123,6 +127,8 @@ export function ClaudeSettingsCard({ defaultValues }: ClaudeSettingsCardProps) {
       thinking_adapter_enabled: values.claude.thinking_adapter_enabled,
       thinking_adapter_budget_tokens_percentage:
         values.claude.thinking_adapter_budget_tokens_percentage,
+      thinking_signature_self_heal_enabled:
+        values.claude.thinking_signature_self_heal_enabled,
     },
   })
 
@@ -148,6 +154,8 @@ export function ClaudeSettingsCard({ defaultValues }: ClaudeSettingsCardProps) {
       'claude.thinking_adapter_budget_tokens_percentage': Number(
         defaultValues.claude.thinking_adapter_budget_tokens_percentage
       ),
+      'claude.thinking_signature_self_heal_enabled':
+        defaultValues.claude.thinking_signature_self_heal_enabled,
     }
 
     form.reset(buildFormDefaults(defaultValues))
@@ -164,6 +172,8 @@ export function ClaudeSettingsCard({ defaultValues }: ClaudeSettingsCardProps) {
       'claude.thinking_adapter_enabled': values.claude.thinking_adapter_enabled,
       'claude.thinking_adapter_budget_tokens_percentage':
         values.claude.thinking_adapter_budget_tokens_percentage,
+      'claude.thinking_signature_self_heal_enabled':
+        values.claude.thinking_signature_self_heal_enabled,
     }
 
     const updates = (
@@ -291,6 +301,29 @@ export function ClaudeSettingsCard({ defaultValues }: ClaudeSettingsCardProps) {
               )}
             />
           </SettingsControlGroup>
+
+          <FormField
+            control={form.control}
+            name='claude.thinking_signature_self_heal_enabled'
+            render={({ field }) => (
+              <SettingsSwitchItem>
+                <SettingsSwitchContent>
+                  <FormLabel>{t('Thinking Signature Self-Heal')}</FormLabel>
+                  <FormDescription>
+                    {t(
+                      'When the upstream reports an invalid thinking signature, remove thinking blocks and retry the request once. When off, that error is returned unchanged.'
+                    )}
+                  </FormDescription>
+                </SettingsSwitchContent>
+                <FormControl>
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                  />
+                </FormControl>
+              </SettingsSwitchItem>
+            )}
+          />
         </SettingsForm>
       </Form>
     </SettingsSection>

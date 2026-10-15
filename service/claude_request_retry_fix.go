@@ -48,11 +48,11 @@ func IsEmptyTextContentBlocksError(statusCode int, errMsg string) bool {
 // It is triggered by recognized upstream error messages and may apply one or
 // both fixes:
 // - fill empty text blocks with a non-whitespace placeholder;
-// - strip thinking blocks when signature is invalid.
+// - strip thinking blocks when signature is invalid and signatureSelfHealEnabled is true.
 // 按错误信息命中规则执行一个或多个修复：
 // - 将空 text 块填充为非空白占位符；
-// - 在 thinking signature 无效时剥离 thinking block。
-func FixClaudeRequestOnFirstRetry(request *dto.ClaudeRequest, statusCode int, errMsg string) int {
+// - 仅在开关开启且 thinking signature 无效时剥离 thinking block。
+func FixClaudeRequestOnFirstRetry(request *dto.ClaudeRequest, statusCode int, errMsg string, signatureSelfHealEnabled bool) int {
 	if request == nil {
 		return 0
 	}
@@ -60,7 +60,7 @@ func FixClaudeRequestOnFirstRetry(request *dto.ClaudeRequest, statusCode int, er
 	if IsEmptyTextContentBlocksError(statusCode, errMsg) {
 		changedCount += fillEmptyTextBlocks(request)
 	}
-	if IsInvalidThinkingSignatureError(statusCode, errMsg) {
+	if signatureSelfHealEnabled && IsInvalidThinkingSignatureError(statusCode, errMsg) {
 		changedCount += stripThinkingBlocks(request)
 	}
 	return changedCount

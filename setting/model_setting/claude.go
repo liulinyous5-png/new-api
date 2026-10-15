@@ -21,6 +21,10 @@ type ClaudeSettings struct {
 	DefaultMaxTokens                      map[string]int                 `json:"default_max_tokens"`
 	ThinkingAdapterEnabled                bool                           `json:"thinking_adapter_enabled"`
 	ThinkingAdapterBudgetTokensPercentage float64                        `json:"thinking_adapter_budget_tokens_percentage"`
+	// ThinkingSignatureSelfHealEnabled retries once after removing thinking
+	// blocks when the upstream reports an invalid thinking signature.
+	// Empty text-block repair does not use this switch. Default is off.
+	ThinkingSignatureSelfHealEnabled bool `json:"thinking_signature_self_heal_enabled"`
 }
 
 // 默认配置
@@ -31,6 +35,7 @@ var defaultClaudeSettings = ClaudeSettings{
 		"default": 8192,
 	},
 	ThinkingAdapterBudgetTokensPercentage: 0.8,
+	ThinkingSignatureSelfHealEnabled:      false,
 }
 
 // 全局实例
