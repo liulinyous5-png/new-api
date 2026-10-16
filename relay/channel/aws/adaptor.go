@@ -92,6 +92,13 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 }
 
+// UsesSDKTransport reports whether requests are executed by the AWS SDK rather
+// than the Bedrock API-key HTTP endpoint. The zero value remains SDK mode for
+// compatibility with the adaptor's existing initialization flow.
+func (a *Adaptor) UsesSDKTransport() bool {
+	return a.ClientMode != ClientModeApiKey
+}
+
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	if info.ChannelOtherSettings.AwsKeyType == dto.AwsKeyTypeApiKey {
 		awsModelId := getAwsModelID(info.UpstreamModelName)

@@ -155,7 +155,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		} else {
 			awsAdaptor, isAWS := adaptor.(*aws.Adaptor)
-			if !isAWS || awsAdaptor.ClientMode != aws.ClientModeAKSK {
+			if !isAWS || !awsAdaptor.UsesSDKTransport() {
 				break
 			}
 		}

@@ -141,6 +141,25 @@ func newAwsStreamResponse(request *http.Request, body io.ReadCloser) *http.Respo
 	}
 }
 
+func TestAdaptorUsesSDKTransport(t *testing.T) {
+	tests := []struct {
+		name       string
+		clientMode ClientMode
+		want       bool
+	}{
+		{name: "default SDK mode", want: true},
+		{name: "explicit AK/SK", clientMode: ClientModeAKSK, want: true},
+		{name: "API key HTTP mode", clientMode: ClientModeApiKey, want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			adaptor := &Adaptor{ClientMode: test.clientMode}
+			assert.Equal(t, test.want, adaptor.UsesSDKTransport())
+		})
+	}
+}
+
 func TestDoAwsClientRequest_AppliesRuntimeHeaderOverrideToAnthropicBeta(t *testing.T) {
 	t.Parallel()
 
