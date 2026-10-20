@@ -391,5 +391,6 @@ export interface AddChannelRequest {
   mode: 'single' | 'batch' | 'multi_to_single'
   multi_key_mode?: 'random' | 'polling'
   batch_add_set_key_prefix_2_name?: boolean
+  split_by_model?: boolean
   channel: Partial<Channel>
 }

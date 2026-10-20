@@ -712,6 +712,7 @@ type AddChannelRequest struct {
 	Mode                      string                `json:"mode"`
 	MultiKeyMode              constant.MultiKeyMode `json:"multi_key_mode"`
 	BatchAddSetKeyPrefix2Name bool                  `json:"batch_add_set_key_prefix_2_name"`
+	SplitByModel              bool                  `json:"split_by_model"`
 	Channel                   *model.Channel        `json:"channel"`
 }
 
@@ -847,20 +848,63 @@ func AddChannel(c *gin.Context) {
 	}
 
 	channels := make([]model.Channel, 0, len(keys))
+	models := make([]string, 0)
+	if addChannelRequest.SplitByModel {
+		seenModels := make(map[string]struct{})
+		for modelName := range strings.SplitSeq(addChannelRequest.Channel.Models, ",") {
+			modelName = strings.TrimSpace(modelName)
+			if modelName == "" {
+				continue
+			}
+			if _, exists := seenModels[modelName]; exists {
+				continue
+			}
+			seenModels[modelName] = struct{}{}
+			models = append(models, modelName)
+		}
+		if len(models) == 0 {
+			common.ApiError(c, fmt.Errorf("models cannot be empty when creating one channel per model"))
+			return
+		}
+		channels = make([]model.Channel, 0, len(keys)*len(models))
+	}
+
 	for _, key := range keys {
 		if key == "" {
 			continue
 		}
-		localChannel := addChannelRequest.Channel
-		localChannel.Key = key
-		if addChannelRequest.BatchAddSetKeyPrefix2Name && len(keys) > 1 {
-			keyPrefix := localChannel.Key
-			if len(localChannel.Key) > 8 {
-				keyPrefix = localChannel.Key[:8]
+		if !addChannelRequest.SplitByModel {
+			localChannel := addChannelRequest.Channel
+			localChannel.Key = key
+			if addChannelRequest.BatchAddSetKeyPrefix2Name && len(keys) > 1 {
+				keyPrefix := localChannel.Key
+				if len(localChannel.Key) > 8 {
+					keyPrefix = localChannel.Key[:8]
+				}
+				localChannel.Name = fmt.Sprintf("%s %s", localChannel.Name, keyPrefix)
 			}
-			localChannel.Name = fmt.Sprintf("%s %s", localChannel.Name, keyPrefix)
+			channels = append(channels, *localChannel)
+			continue
 		}
-		channels = append(channels, *localChannel)
+
+		for _, modelName := range models {
+			localChannel := *addChannelRequest.Channel
+			localChannel.Key = key
+			if addChannelRequest.BatchAddSetKeyPrefix2Name && len(keys) > 1 {
+				keyPrefix := localChannel.Key
+				if len(localChannel.Key) > 8 {
+					keyPrefix = localChannel.Key[:8]
+				}
+				localChannel.Name = fmt.Sprintf("%s %s", localChannel.Name, keyPrefix)
+			}
+			if strings.Contains(localChannel.Name, "{{model}}") {
+				localChannel.Name = strings.ReplaceAll(localChannel.Name, "{{model}}", modelName)
+			} else {
+				localChannel.Name = fmt.Sprintf("%s-%s", localChannel.Name, modelName)
+			}
+			localChannel.Models = modelName
+			channels = append(channels, localChannel)
+		}
 	}
 	err = model.BatchInsertChannels(channels)
 	if err != nil {

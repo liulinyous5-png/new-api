@@ -2591,6 +2591,32 @@ export function ChannelMutateDrawer({
         {!isEditing && (
           <FormField
             control={form.control}
+            name='split_by_model'
+            render={({ field }) => (
+              <FormItem className={sideDrawerSwitchItemClassName()}>
+                <div className='flex flex-col gap-0.5'>
+                  <FormLabel>{t('Create one channel per model')}</FormLabel>
+                  <FormDescription className='text-xs'>
+                    {t(
+                      'Creates one channel for each selected model. Use {{model}} in the channel name as a model placeholder.',
+                      { model: '{{model}}' }
+                    )}
+                  </FormDescription>
+                </div>
+                <FormControl>
+                  <Switch
+                    checked={field.value === true}
+                    onCheckedChange={field.onChange}
+                  />
+                </FormControl>
+              </FormItem>
+            )}
+          />
+        )}
+
+        {!isEditing && (
+          <FormField
+            control={form.control}
             name='status'
             render={({ field }) => (
               <FormItem className={sideDrawerSwitchItemClassName()}>

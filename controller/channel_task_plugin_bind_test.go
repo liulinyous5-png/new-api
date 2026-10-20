@@ -86,6 +86,91 @@ export function parseTaskResult() { return {}; }
 	assert.NotContains(t, adminOtherType.Body.String(), "task_plugin.bind")
 }
 
+func TestAddChannelCanCreateOneChannelPerModel(t *testing.T) {
+	setupTaskPluginBindChannelTest(t)
+
+	response := postAddChannel(t, 1, common.RoleRootUser, `{
+		"mode":"batch",
+		"split_by_model":true,
+		"channel":{
+			"type":1,
+			"name":"channel-{{model}}",
+			"key":"sk-first\nsk-second",
+			"models":"gpt-4o, gpt-4o-mini,gpt-4o",
+			"group":"default",
+			"status":1
+		}
+	}`)
+	require.Contains(t, response.Body.String(), `"success":true`)
+
+	var channels []model.Channel
+	require.NoError(t, model.DB.Order("id").Find(&channels).Error)
+	require.Len(t, channels, 4)
+	assert.Equal(t, "channel-gpt-4o", channels[0].Name)
+	assert.Equal(t, "gpt-4o", channels[0].Models)
+	assert.Equal(t, "channel-gpt-4o-mini", channels[1].Name)
+	assert.Equal(t, "gpt-4o-mini", channels[1].Models)
+	assert.Equal(t, "channel-gpt-4o", channels[2].Name)
+	assert.Equal(t, "gpt-4o", channels[2].Models)
+	assert.Equal(t, "channel-gpt-4o-mini", channels[3].Name)
+	assert.Equal(t, "gpt-4o-mini", channels[3].Models)
+	assert.Equal(t, "sk-first", channels[0].Key)
+	assert.Equal(t, "sk-first", channels[1].Key)
+	assert.Equal(t, "sk-second", channels[2].Key)
+	assert.Equal(t, "sk-second", channels[3].Key)
+}
+
+func TestAddChannelAppendsModelWhenSplitNameHasNoPlaceholder(t *testing.T) {
+	setupTaskPluginBindChannelTest(t)
+
+	response := postAddChannel(t, 1, common.RoleRootUser, `{
+		"mode":"single",
+		"split_by_model":true,
+		"channel":{
+			"type":1,
+			"name":"channel",
+			"key":"sk-test",
+			"models":"gpt-4o,gpt-4o-mini",
+			"group":"default",
+			"status":1
+		}
+	}`)
+	require.Contains(t, response.Body.String(), `"success":true`)
+
+	var channels []model.Channel
+	require.NoError(t, model.DB.Order("name").Find(&channels).Error)
+	require.Len(t, channels, 2)
+	assert.Equal(t, "channel-gpt-4o", channels[0].Name)
+	assert.Equal(t, "channel-gpt-4o-mini", channels[1].Name)
+}
+
+func TestAddChannelWithoutModelSplitKeepsAllModelsOnEachKeyChannel(t *testing.T) {
+	setupTaskPluginBindChannelTest(t)
+
+	response := postAddChannel(t, 1, common.RoleRootUser, `{
+		"mode":"batch",
+		"channel":{
+			"type":1,
+			"name":"channel-{{model}}",
+			"key":"sk-first\nsk-second",
+			"models":"gpt-4o,gpt-4o-mini",
+			"group":"default",
+			"status":1
+		}
+	}`)
+	require.Contains(t, response.Body.String(), `"success":true`)
+
+	var channels []model.Channel
+	require.NoError(t, model.DB.Order("id").Find(&channels).Error)
+	require.Len(t, channels, 2)
+	for _, channel := range channels {
+		assert.Equal(t, "channel-{{model}}", channel.Name)
+		assert.Equal(t, "gpt-4o,gpt-4o-mini", channel.Models)
+	}
+	assert.Equal(t, "sk-first", channels[0].Key)
+	assert.Equal(t, "sk-second", channels[1].Key)
+}
+
 func TestUpdateChannelTaskPluginRequiresBindPermission(t *testing.T) {
 	setupTaskPluginBindChannelTest(t)
 	const key = "channel-bind-update"

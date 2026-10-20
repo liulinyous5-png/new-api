@@ -440,6 +440,11 @@ test('selecting a plugin opens a prefilled channel and creates its explicit bind
   )
   expect(screen.getByDisplayValue('https://a.example')).toBeVisible()
   expect(screen.queryByLabelText('Task plugin *')).not.toBeInTheDocument()
+  const nameInput = screen.getByRole('textbox', { name: /^Name\s*\*$/ })
+  fireEvent.change(nameInput, { target: { value: 'Video A - {{model}}' } })
+  await user.click(
+    screen.getByRole('switch', { name: 'Create one channel per model' })
+  )
   fireEvent.change(screen.getByLabelText('API Key *'), {
     target: { value: 'channel-secret' },
   })
@@ -449,8 +454,9 @@ test('selecting a plugin opens a prefilled channel and creates its explicit bind
   expect(url).toBe('/api/channel')
   expect(payload).toMatchObject({
     mode: 'single',
+    split_by_model: true,
     channel: {
-      name: 'Video A',
+      name: 'Video A - {{model}}',
       type: 61,
       key: 'channel-secret',
       models: 'video-a-1',
@@ -721,7 +727,7 @@ test.each(['create', 'edit'])(
       fireEvent.change(screen.getByLabelText('API Key *'), {
         target: { value: 'channel-key' },
       })
-      fireEvent.change(screen.getByLabelText(/Base URL/), {
+      fireEvent.change(screen.getByRole('textbox', { name: 'Base URL' }), {
         target: { value: 'https://channel.example' },
       })
     } else {
@@ -922,7 +928,9 @@ test('retrying extension metadata preserves the editable built-in draft and sele
     await screen.findByRole('group', { name: 'Plugin extensions' })
   ).toBeVisible()
   expect(screen.getByLabelText('Name *')).toHaveValue('Keep this draft')
-  expect(screen.getByLabelText(/Base URL/)).toHaveValue('https://saved.example')
+  expect(screen.getByRole('textbox', { name: 'Base URL' })).toHaveValue(
+    'https://saved.example'
+  )
   expect(screen.getByRole('button', { name: 'custom-model' })).toBeVisible()
   expect(
     screen.queryByRole('button', { name: 'sora-2' })

@@ -262,6 +262,7 @@ export const channelFormSchema = z
     multi_key_mode: z.enum(['single', 'batch', 'multi_to_single']).optional(),
     multi_key_type: z.enum(['random', 'polling']).optional(),
     batch_add_set_key_prefix_2_name: z.boolean().optional(),
+    split_by_model: z.boolean().optional(),
     key_mode: z.enum(['append', 'replace']).optional(), // For editing multi-key channels
     // Channel extra settings (stored in setting JSON, not sent directly)
     force_format: z.boolean().optional(),
@@ -476,6 +477,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   multi_key_mode: 'single',
   multi_key_type: 'random',
   batch_add_set_key_prefix_2_name: false,
+  split_by_model: false,
   key_mode: 'append',
   // Channel extra settings
   force_format: false,
@@ -865,6 +867,7 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
   account_credentials?: boolean
   multi_key_mode?: 'random' | 'polling'
   batch_add_set_key_prefix_2_name?: boolean
+  split_by_model?: boolean
   channel: Partial<Channel>
 } {
   const mode = formData.multi_key_mode || 'single'
@@ -907,6 +910,7 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
       mode === 'multi_to_single' ? formData.multi_key_type : undefined,
     batch_add_set_key_prefix_2_name:
       mode === 'batch' ? formData.batch_add_set_key_prefix_2_name : undefined,
+    split_by_model: formData.split_by_model || undefined,
     channel,
   }
 }
