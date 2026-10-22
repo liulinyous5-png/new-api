@@ -177,7 +177,7 @@ func buildFeishuAlertCardPayload(title, content, emptyFallback string) ([]byte, 
 func buildWebhookPayload(webhookURL string, data dto.Notify) ([]byte, error) {
 	content := data.Content
 	for _, value := range data.Values {
-		content = fmt.Sprintf(content, value)
+		content = strings.Replace(content, dto.ContentValueParam, fmt.Sprintf("%v", value), 1)
 	}
 
 	if isFeishuWebhookURL(webhookURL) {
