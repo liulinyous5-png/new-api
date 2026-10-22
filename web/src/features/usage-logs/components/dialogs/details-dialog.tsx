@@ -664,6 +664,19 @@ export function DetailsDialog(props: DetailsDialogProps) {
               mono
             />
           )}
+          {other?.trace_id && (
+            <DetailRow label={t('Trace ID')} value={other.trace_id} mono />
+          )}
+          {other?.client_request_id && (
+            <DetailRow
+              label={t('Client Request ID')}
+              value={other.client_request_id}
+              mono
+            />
+          )}
+          {other?.session_id && (
+            <DetailRow label={t('Session ID')} value={other.session_id} mono />
+          )}
 
           {props.isAdmin && props.log.channel > 0 && (
             <DetailRow

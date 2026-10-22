@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -92,6 +93,45 @@ const (
 	LogTypeRefund  = 6
 	LogTypeLogin   = 7
 )
+
+const clientTraceIDMaxBytes = 128
+
+// applyClientTraceIDs copies optional client correlation headers into the
+// public consume/error log metadata. Missing, blank, or unsafe values are
+// left unset so clients that do not send a header keep the previous log shape.
+func applyClientTraceIDs(c *gin.Context, other *LogOther) *LogOther {
+	if c == nil || c.Request == nil {
+		return other
+	}
+	headers := [...]struct {
+		header string
+		field  string
+	}{
+		{header: "X-Trace-Id", field: "trace_id"},
+		{header: "X-Request-ID", field: "client_request_id"},
+		{header: "x-conversation-id", field: "session_id"},
+	}
+	for _, item := range headers {
+		value := strings.TrimSpace(c.GetHeader(item.header))
+		if value == "" || strings.ContainsAny(value, "\r\n\x00") {
+			continue
+		}
+		if len(value) > clientTraceIDMaxBytes {
+			value = value[:clientTraceIDMaxBytes]
+			for value != "" && !utf8.ValidString(value) {
+				value = value[:len(value)-1]
+			}
+			if value == "" {
+				continue
+			}
+		}
+		if other == nil {
+			other = NewLogOther()
+		}
+		other.SetPublic(item.field, value)
+	}
+	return other
+}
 
 func ensureLogRequestId(log *Log) {
 	if log != nil && log.RequestId == "" {
@@ -282,6 +322,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
+	other = applyClientTraceIDs(c, other)
 	otherStr := other.JSONString()
 	// 判断是否需要记录 IP
 	needRecordIp := false
@@ -345,6 +386,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	if !common.LogConsumeEnabled {
 		return
 	}
+	params.Other = applyClientTraceIDs(c, params.Other)
 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
