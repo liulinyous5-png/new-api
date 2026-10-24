@@ -240,6 +240,56 @@ func TestDoAwsClientRequest_ForwardsThinkingBlockBindingAndBetaList(t *testing.T
 	assert.JSONEq(t, `{"type":"adaptive","display":"summarized","block_binding":{"prefix_mismatch_behavior":"drop_block"}}`, string(payload.Thinking))
 }
 
+func TestDoAwsClientRequest_TopLevelCacheControlFollowsModelSupport(t *testing.T) {
+	tests := []struct {
+		model   string
+		forward bool
+	}{
+		{model: "claude-opus-4-8", forward: true},
+		{model: "claude-sonnet-5", forward: true},
+		{model: "claude-opus-5-5", forward: true},
+		{model: "global.anthropic.claude-haiku-5-5", forward: true},
+		{model: "claude-opus-4-7", forward: false},
+		{model: "claude-opus-4-20250514", forward: false},
+		{model: "claude-sonnet-4-6", forward: false},
+		{model: "claude-haiku-4-5-20251001", forward: false},
+		{model: "claude-3-5-sonnet-20240620", forward: false},
+		{model: "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123", forward: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.model, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			info := &relaycommon.RelayInfo{
+				OriginModelName: test.model,
+				ChannelMeta: &relaycommon.ChannelMeta{
+					ApiKey:            "access-key|secret-key|us-east-1",
+					UpstreamModelName: test.model,
+				},
+			}
+			requestBody := bytes.NewBufferString(`{"max_tokens":128,"cache_control":{"type":"ephemeral","ttl":"1h"},` +
+				`"messages":[{"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}]}]}`)
+			adaptor := &Adaptor{}
+
+			_, err := doAwsClientRequest(ctx, info, adaptor, requestBody)
+			require.NoError(t, err)
+			awsReq, ok := adaptor.AwsReq.(*bedrockruntime.InvokeModelInput)
+			require.True(t, ok)
+
+			var payload map[string]json.RawMessage
+			require.NoError(t, common.Unmarshal(awsReq.Body, &payload))
+			assert.Contains(t, string(payload["messages"]), "cache_control")
+			if test.forward {
+				assert.JSONEq(t, `{"type":"ephemeral","ttl":"1h"}`, string(payload["cache_control"]))
+			} else {
+				assert.NotContains(t, payload, "cache_control")
+			}
+		})
+	}
+}
+
 func TestNewAwsInvokeContextInheritsParent(t *testing.T) {
 	originalRelayTimeout := common.RelayTimeout
 	t.Cleanup(func() {

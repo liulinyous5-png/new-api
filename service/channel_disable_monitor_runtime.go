@@ -35,7 +35,9 @@ func HandleChannelAutoDisabled(channelError types.ChannelError, reason string) {
 			return
 		}
 	} else {
-		NotifyRootUser(dto.NotifyTypeChannelAutoDisableAlert, subject, content)
+		NotifyChannelWatchers(dto.NotifyTypeChannelAutoDisableAlert, func(string) (string, string) {
+			return subject, content
+		})
 	}
 }
 

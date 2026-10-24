@@ -12,12 +12,12 @@ import (
 const ttftMonitorConfigRedisKey = "monitor:ttft:config"
 
 type TTFTMonitorConfig struct {
-	Enabled          bool  `json:"enabled"`
-	ChannelIDs       []int `json:"channel_ids"`
-	ThresholdSeconds int   `json:"threshold_seconds"`
-	WindowSeconds    int   `json:"window_seconds"`
-	CountThreshold   int   `json:"count_threshold"`
-	CooldownSeconds  int   `json:"cooldown_seconds"`
+	Enabled          bool   `json:"enabled"`
+	ChannelIDs       []int  `json:"channel_ids"`
+	ThresholdSeconds int    `json:"threshold_seconds"`
+	WindowSeconds    int    `json:"window_seconds"`
+	CountThreshold   int    `json:"count_threshold"`
+	CooldownSeconds  int    `json:"cooldown_seconds"`
 	NotifyType       string `json:"notify_type"`
 	WebhookURL       string `json:"webhook_url,omitempty"`
 	WebhookSecret    string `json:"webhook_secret,omitempty"`

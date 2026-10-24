@@ -72,7 +72,9 @@ func HandleConsumeLogForTTFTMonitor(logEntry *model.Log, userId int, params mode
 		}
 	} else {
 		// Use static type so existing per-type notification limit works as designed.
-		NotifyRootUser(dto.NotifyTypeTTFTAlert, subject, content)
+		NotifyChannelWatchers(dto.NotifyTypeTTFTAlert, func(string) (string, string) {
+			return subject, content
+		})
 	}
 
 	if err = setTTFTMonitorCooldown(cooldownKey, cfg.CooldownSeconds); err != nil {

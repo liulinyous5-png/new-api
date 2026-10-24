@@ -22,6 +22,7 @@ import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import * as z from 'zod'
 
+import { PasswordInput } from '@/components/password-input'
 import {
   Form,
   FormControl,
@@ -54,6 +55,9 @@ const logSettingsSchema = z.object({
     user_export_enabled: z.boolean(),
     max_range_days: z.number().int().min(1),
   }),
+  ErrorWebhookAlertEnabled: z.boolean(),
+  ErrorWebhookAlertURL: z.string(),
+  ErrorWebhookAlertSecret: z.string(),
 })
 
 type LogSettingsFormValues = z.infer<typeof logSettingsSchema>
@@ -63,6 +67,9 @@ type LogSettingsSectionProps = {
     LogConsumeEnabled: boolean
     'log_setting.user_export_enabled': boolean
     'log_setting.max_range_days': number
+    ErrorWebhookAlertEnabled: boolean
+    ErrorWebhookAlertURL: string
+    ErrorWebhookAlertSecret: string
   }
 }
 
@@ -71,6 +78,7 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
   const updateOption = useUpdateOption()
   const recordingTitleId = useId()
   const searchTitleId = useId()
+  const errorAlertTitleId = useId()
   const formDefaults = useMemo<LogSettingsFormValues>(
     () => ({
       LogConsumeEnabled: props.defaultValues.LogConsumeEnabled,
@@ -79,6 +87,9 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
           props.defaultValues['log_setting.user_export_enabled'],
         max_range_days: props.defaultValues['log_setting.max_range_days'],
       },
+      ErrorWebhookAlertEnabled: props.defaultValues.ErrorWebhookAlertEnabled,
+      ErrorWebhookAlertURL: props.defaultValues.ErrorWebhookAlertURL,
+      ErrorWebhookAlertSecret: props.defaultValues.ErrorWebhookAlertSecret,
     }),
     [props.defaultValues]
   )
@@ -99,6 +110,9 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
         values.log_setting.user_export_enabled,
       ],
       ['log_setting.max_range_days', values.log_setting.max_range_days],
+      ['ErrorWebhookAlertEnabled', values.ErrorWebhookAlertEnabled],
+      ['ErrorWebhookAlertURL', values.ErrorWebhookAlertURL],
+      ['ErrorWebhookAlertSecret', values.ErrorWebhookAlertSecret],
     ] as const
     for (const [key, value] of changes) {
       if (value === props.defaultValues[key]) continue
@@ -201,6 +215,78 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
                         'The longest time range a user can view at once in the logs and on the dashboard, and the longest range any export can cover.'
                       )}
                     </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </SettingsFormGrid>
+          </div>
+
+          <Separator />
+
+          <div
+            role='group'
+            aria-labelledby={errorAlertTitleId}
+            className='flex min-w-0 flex-col gap-4'
+          >
+            <h4 id={errorAlertTitleId} className='font-medium'>
+              {t('Channel error alerts')}
+            </h4>
+            <FormField
+              control={form.control}
+              name='ErrorWebhookAlertEnabled'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>
+                      {t('Enable channel error webhook alerts')}
+                    </FormLabel>
+                    <FormDescription>
+                      {t(
+                        'Send a webhook when a channel reports an error. Independent of quota usage logging.'
+                      )}
+                    </FormDescription>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </SettingsSwitchItem>
+              )}
+            />
+            <SettingsFormGrid>
+              <FormField
+                control={form.control}
+                name='ErrorWebhookAlertURL'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Error alert webhook URL')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder='https://open.feishu.cn/open-apis/bot/v2/hook/xxxx'
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name='ErrorWebhookAlertSecret'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Error alert webhook secret')}</FormLabel>
+                    <FormControl>
+                      <PasswordInput
+                        autoComplete='new-password'
+                        placeholder={t('Optional, used for signing')}
+                        {...field}
+                      />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}

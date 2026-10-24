@@ -1,6 +1,9 @@
 package aws
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 var awsModelIDMap = map[string]string{
 	"claude-3-sonnet-20240229":   "anthropic.claude-3-sonnet-20240229-v1:0",
@@ -158,4 +161,33 @@ var ChannelName = "aws"
 // 判断是否为Nova模型
 func isNovaModel(modelId string) bool {
 	return strings.Contains(modelId, "nova-")
+}
+
+// supportsTopLevelCacheControl reports whether Bedrock accepts the request-level
+// automatic caching field for a Claude model. Bedrock rejects it with a 400 on
+// Opus 4.7 and earlier, Sonnet 4.6, Haiku 4.5 and the Claude 3 family; only
+// Opus 4.8 and the 5.x generation accept it. Unrecognized IDs are treated as
+// unsupported so the field is dropped, matching the upstream InvokeModel default.
+func supportsTopLevelCacheControl(awsModelId string) bool {
+	_, name, found := strings.Cut(awsModelId, "claude-")
+	if !found {
+		return false
+	}
+	major, minor := -1, 0
+	for part := range strings.SplitSeq(name, "-") {
+		value, err := strconv.Atoi(part)
+		if err != nil || len(part) > 2 {
+			if major >= 0 {
+				break
+			}
+			continue
+		}
+		if major < 0 {
+			major = value
+			continue
+		}
+		minor = value
+		break
+	}
+	return major >= 5 || (major == 4 && minor >= 8)
 }

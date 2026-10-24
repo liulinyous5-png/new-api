@@ -44,6 +44,9 @@ function Fixture() {
             LogConsumeEnabled: true,
             'log_setting.user_export_enabled': true,
             'log_setting.max_range_days': 30,
+            ErrorWebhookAlertEnabled: false,
+            ErrorWebhookAlertURL: '',
+            ErrorWebhookAlertSecret: '',
           }}
         />
       </SettingsPageProvider>
@@ -78,7 +81,7 @@ beforeEach(() => {
   vi.spyOn(api, 'put').mockResolvedValue({ data: { success: true } })
 })
 
-test('the page shows the four log modules in order, each with its own controls', async () => {
+test('the page shows the five log modules in order, each with its own controls', async () => {
   await renderSettings()
 
   expect(
@@ -86,6 +89,7 @@ test('the page shows the four log modules in order, each with its own controls',
   ).toEqual([
     'Log recording',
     'Log search and export',
+    'Channel error alerts',
     'Clean history logs',
     'Server Log Management',
   ])
@@ -103,6 +107,22 @@ test('the page shows the four log modules in order, each with its own controls',
       name: 'Longest log time range (days)',
     })
   ).toBeVisible()
+  const errorAlerts = screen.getByRole('group', {
+    name: 'Channel error alerts',
+  })
+  expect(
+    within(errorAlerts).getByRole('switch', {
+      name: 'Enable channel error webhook alerts',
+    })
+  ).toBeVisible()
+  expect(
+    within(errorAlerts).getByRole('textbox', {
+      name: 'Error alert webhook URL',
+    })
+  ).toBeVisible()
+  expect(
+    within(errorAlerts).getByLabelText('Error alert webhook secret')
+  ).toHaveAttribute('type', 'password')
   const cleanup = screen.getByRole('group', { name: 'Clean history logs' })
   expect(
     within(cleanup).getByRole('button', { name: 'Clean logs' })
@@ -169,6 +189,30 @@ test('saving sends only the log export settings that changed', async () => {
   expect(api.put).toHaveBeenCalledWith('/api/option/', {
     key: 'log_setting.max_range_days',
     value: 90,
+  })
+})
+
+test('saving error alert settings sends the changed fields and keeps a blank secret unchanged', async () => {
+  const user = userEvent.setup()
+  await renderSettings()
+
+  await user.click(
+    screen.getByRole('switch', { name: 'Enable channel error webhook alerts' })
+  )
+  await user.type(
+    screen.getByRole('textbox', { name: 'Error alert webhook URL' }),
+    'https://hooks.example.com/alert'
+  )
+  await user.click(screen.getByRole('button', { name: 'Save log settings' }))
+
+  await waitFor(() => expect(api.put).toHaveBeenCalledTimes(2))
+  expect(api.put).toHaveBeenCalledWith('/api/option/', {
+    key: 'ErrorWebhookAlertEnabled',
+    value: true,
+  })
+  expect(api.put).toHaveBeenCalledWith('/api/option/', {
+    key: 'ErrorWebhookAlertURL',
+    value: 'https://hooks.example.com/alert',
   })
 })
 

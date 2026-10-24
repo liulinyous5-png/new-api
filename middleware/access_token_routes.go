@@ -173,6 +173,13 @@ var accessTokenRouteRules = map[string]accessTokenRouteRule{
 	"GET /api/ratio_sync/channels":              accessTokenScopeRule("option:read"),
 	"POST /api/ratio_sync/fetch":                accessTokenScopeRule("option:write"),
 
+	// router/api-router.go: /api/monitor
+	// The configs include plaintext webhook secrets, so only dashboard sessions may read or change them.
+	"GET /api/monitor/ttft/config":            accessTokenSessionRule,
+	"PUT /api/monitor/ttft/config":            accessTokenSessionRule,
+	"GET /api/monitor/channel_disable/config": accessTokenSessionRule,
+	"PUT /api/monitor/channel_disable/config": accessTokenSessionRule,
+
 	// router/api-router.go: /api/performance, /api/system-task, /api/system-info
 	"GET /api/performance/stats":                   accessTokenScopeRule("ops:read"),
 	"DELETE /api/performance/disk_cache":           accessTokenScopeRule("ops:write"),
