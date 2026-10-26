@@ -377,6 +377,11 @@ func migrateDB() error {
 		&CasbinRule{},
 		&AuthzRole{},
 		&UserAccessToken{},
+		&ChannelQualityProbe{},
+		&ChannelQualityRun{},
+		&ChannelQualitySuite{},
+		&ChannelQualitySuiteItem{},
+		&ChannelQualitySuiteRun{},
 	)
 	if err != nil {
 		return err
@@ -388,6 +393,9 @@ func migrateDB() error {
 		return fmt.Errorf("initialize legacy access token deadline: %w", err)
 	}
 	if err := InitializeExternalIdentityClaims(); err != nil {
+		return err
+	}
+	if err := EnsureBuiltinChannelQualityProbe(); err != nil {
 		return err
 	}
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {

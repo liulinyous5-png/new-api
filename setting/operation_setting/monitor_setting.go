@@ -2,6 +2,7 @@ package operation_setting
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 
@@ -13,6 +14,8 @@ type MonitorSetting struct {
 	AutoTestChannelMinutes float64 `json:"auto_test_channel_minutes"`
 	ChannelTestMode        string  `json:"channel_test_mode"`
 	ChannelTestConcurrency int     `json:"channel_test_concurrency"`
+	AutoQualityEnabled     bool    `json:"auto_quality_enabled"`
+	AutoQualityMinutes     float64 `json:"auto_quality_minutes"`
 }
 
 const (
@@ -31,6 +34,8 @@ var monitorSetting = MonitorSetting{
 	AutoTestChannelMinutes: 10,
 	ChannelTestMode:        ChannelTestModeScheduledAll,
 	ChannelTestConcurrency: DefaultChannelTestConcurrency,
+	AutoQualityEnabled:     false,
+	AutoQualityMinutes:     60,
 }
 
 func init() {
@@ -59,7 +64,23 @@ func GetMonitorSetting() *MonitorSetting {
 		monitorSetting.ChannelTestMode = ChannelTestModeScheduledAll
 	}
 	monitorSetting.ChannelTestConcurrency = NormalizeChannelTestConcurrency(monitorSetting.ChannelTestConcurrency)
+	if monitorSetting.AutoQualityMinutes < MinAutoQualityMinutes || monitorSetting.AutoQualityMinutes > MaxAutoQualityMinutes {
+		monitorSetting.AutoQualityMinutes = 60
+	}
 	return &monitorSetting
+}
+
+const (
+	MinAutoQualityMinutes = 1
+	MaxAutoQualityMinutes = 1440
+)
+
+func ValidateAutoQualityMinutes(value string) error {
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil || parsed < MinAutoQualityMinutes || parsed > MaxAutoQualityMinutes || parsed != math.Trunc(parsed) || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return fmt.Errorf("auto quality interval must be between %d and %d minutes", MinAutoQualityMinutes, MaxAutoQualityMinutes)
+	}
+	return nil
 }
 
 func NormalizeChannelTestConcurrency(concurrency int) int {

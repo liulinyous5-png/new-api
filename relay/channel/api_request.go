@@ -320,6 +320,43 @@ func applyHeaderOverrideToRequest(req *http.Request, headerOverride map[string]s
 	}
 }
 
+// DoQualityRequest sends one audit request. Probe headers are applied after the
+// channel header override so a channel that strips anthropic-beta cannot hide
+// the capability being measured.
+func DoQualityRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader, probeHeaders map[string]string) (*http.Response, error) {
+	fullRequestURL, err := a.GetRequestURL(info)
+	if err != nil {
+		return nil, fmt.Errorf("get request url failed: %w", err)
+	}
+	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, fullRequestURL, requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("new request failed: %w", err)
+	}
+	ApplyUpstreamBodyMetadata(req, requestBody)
+	headers := req.Header
+	if err = a.SetupRequestHeader(c, &headers, info); err != nil {
+		return nil, fmt.Errorf("setup request header failed: %w", err)
+	}
+	headerOverride, err := processHeaderOverride(info, c)
+	if err != nil {
+		return nil, err
+	}
+	applyHeaderOverrideToRequest(req, headerOverride)
+	for key, value := range probeHeaders {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		req.Header.Set(key, value)
+	}
+	resp, err := doRequest(c, req, info)
+	if err != nil {
+		return nil, fmt.Errorf("do request failed: %w", err)
+	}
+	return resp, nil
+}
+
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {

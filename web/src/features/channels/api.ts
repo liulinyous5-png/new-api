@@ -685,6 +685,220 @@ export async function getEnabledModels(): Promise<{
 }
 
 // ============================================================================
+// Channel quality audit
+// ============================================================================
+
+export type ChannelQualityAssertion = {
+  name: string
+  expr: string
+}
+
+export type ChannelQualityProbe = {
+  id: number
+  name: string
+  builtin: boolean
+  headers: Record<string, string>
+  body: string
+  statuses: number[]
+  assertions: ChannelQualityAssertion[]
+  created_at: number
+  updated_at: number
+}
+
+export type ChannelQualityAssertionResult = {
+  name: string
+  expr: string
+  passed: boolean
+  error?: string
+}
+
+export type ChannelQualityRun = {
+  id: number
+  channel_id: number
+  key_index: number
+  requested_model: string
+  upstream_model: string
+  probe_id: number
+  probe_name: string
+  verdict: string
+  assertion_results: ChannelQualityAssertionResult[] | null
+  actual_edits: unknown
+  usage: unknown
+  error: string
+  suite_run_id?: number
+  suite_item_id?: number
+  created_at: number
+}
+
+export type ChannelQualitySuiteItem = {
+  id: number
+  probe_id: number
+  model: string
+  sort: number
+}
+
+export type ChannelQualitySuite = {
+  id: number
+  name: string
+  items: ChannelQualitySuiteItem[]
+  created_at: number
+  updated_at: number
+}
+
+export type ChannelQualitySuiteRun = {
+  id: number
+  channel_id: number
+  suite_id: number
+  suite_name: string
+  verdict: string
+  error: string
+  created_at: number
+  finished_at: number
+  items: ChannelQualityRun[]
+}
+
+export type ChannelQualityLatest = {
+  channel_id: number
+  verdict: string
+  created_at: number
+}
+
+type ChannelQualityResponse<T> = {
+  success: boolean
+  message?: string
+  data?: T
+}
+
+export async function listChannelQualityProbes(): Promise<
+  ChannelQualityResponse<ChannelQualityProbe[]>
+> {
+  const res = await api.get('/api/channel/quality/probes')
+  return res.data
+}
+
+export async function createChannelQualityProbe(data: {
+  name: string
+  headers: Record<string, string>
+  body: string
+  statuses: number[]
+  assertions: ChannelQualityAssertion[]
+}): Promise<ChannelQualityResponse<ChannelQualityProbe>> {
+  const res = await api.post('/api/channel/quality/probes', data)
+  return res.data
+}
+
+export async function updateChannelQualityProbe(
+  id: number,
+  data: {
+    name: string
+    headers: Record<string, string>
+    body: string
+    statuses: number[]
+    assertions: ChannelQualityAssertion[]
+  }
+): Promise<ChannelQualityResponse<ChannelQualityProbe>> {
+  const res = await api.put(`/api/channel/quality/probes/${id}`, data)
+  return res.data
+}
+
+export async function deleteChannelQualityProbe(
+  id: number
+): Promise<ChannelQualityResponse<undefined>> {
+  const res = await api.delete(`/api/channel/quality/probes/${id}`)
+  return res.data
+}
+
+export async function copyChannelQualityProbe(
+  id: number
+): Promise<ChannelQualityResponse<ChannelQualityProbe>> {
+  const res = await api.post(`/api/channel/quality/probes/${id}/copy`)
+  return res.data
+}
+
+export type ChannelQualityRunPage = {
+  page: number
+  page_size: number
+  total: number
+  items: ChannelQualityRun[]
+}
+
+export async function getChannelQualityRun(
+  channelId: number
+): Promise<ChannelQualityResponse<ChannelQualityRun | null>> {
+  const res = await api.get(`/api/channel/${channelId}/quality`)
+  return res.data
+}
+
+export async function listChannelQualityRuns(
+  channelId: number,
+  page: number,
+  pageSize: number
+): Promise<ChannelQualityResponse<ChannelQualityRunPage>> {
+  const res = await api.get(`/api/channel/${channelId}/quality/runs`, {
+    params: { p: page, page_size: pageSize },
+  })
+  return res.data
+}
+
+export async function listLatestChannelQuality(): Promise<
+  ChannelQualityResponse<ChannelQualityLatest[]>
+> {
+  const res = await api.get('/api/channel/quality/latest')
+  return res.data
+}
+
+export async function listChannelQualitySuites(): Promise<
+  ChannelQualityResponse<ChannelQualitySuite[]>
+> {
+  const res = await api.get('/api/channel/quality/suites')
+  return res.data
+}
+
+export async function createChannelQualitySuite(data: {
+  name: string
+  items: { probe_id: number; model: string }[]
+}): Promise<ChannelQualityResponse<ChannelQualitySuite>> {
+  const res = await api.post('/api/channel/quality/suites', data)
+  return res.data
+}
+
+export async function updateChannelQualitySuite(
+  id: number,
+  data: { name: string; items: { probe_id: number; model: string }[] }
+): Promise<ChannelQualityResponse<ChannelQualitySuite>> {
+  const res = await api.put(`/api/channel/quality/suites/${id}`, data)
+  return res.data
+}
+
+export async function deleteChannelQualitySuite(
+  id: number
+): Promise<ChannelQualityResponse<undefined>> {
+  const res = await api.delete(`/api/channel/quality/suites/${id}`)
+  return res.data
+}
+
+export async function getChannelQualitySuiteRun(
+  channelId: number
+): Promise<ChannelQualityResponse<ChannelQualitySuiteRun | null>> {
+  const res = await api.get(`/api/channel/${channelId}/quality/suite-run`)
+  return res.data
+}
+
+export async function startChannelQuality(
+  channelId: number,
+  data: { probe_id: number; model: string; key_index?: number }
+): Promise<
+  ChannelQualityResponse<{
+    task_id: string
+    run_id: number
+    started_at: number
+  }>
+> {
+  const res = await api.post(`/api/channel/${channelId}/quality`, data)
+  return res.data
+}
+
+// ============================================================================
 // Ollama Utilities
 // ============================================================================
 

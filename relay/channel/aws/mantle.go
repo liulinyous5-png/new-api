@@ -115,6 +115,7 @@ func (a *Adaptor) newMantleRequest(c *gin.Context, info *relaycommon.RelayInfo, 
 			req.Host = value
 		}
 	}
+	applyQualityProbeHeaders(req.Header, qualityProbeHeaders(c))
 	// HTTP/2 and intermediaries can remove hop-by-hop headers. Strip them
 	// after overrides, including fields named by Connection, so SigV4 covers
 	// only headers that will reach Mantle. Proxy credentials must stay local.

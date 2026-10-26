@@ -17,12 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import type { Row } from '@tanstack/react-table'
 import {
   MoreHorizontal,
   Boxes,
   Pencil,
   PlugZap,
+  ShieldCheck,
   Gauge,
   DollarSign,
   Download,
@@ -59,7 +61,10 @@ import {
 } from '@/lib/admin-permissions'
 import { useAuthStore } from '@/stores/auth-store'
 
-import { MODEL_FETCHABLE_TYPES } from '../constants'
+import {
+  MODEL_FETCHABLE_TYPES,
+  QUALITY_AUDIT_CHANNEL_TYPES,
+} from '../constants'
 import {
   channelsQueryKeys,
   handleDeleteChannel,
@@ -78,6 +83,7 @@ interface DataTableRowActionsProps {
 
 export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const layout = useContext(ChannelRowActionsLayoutContext)
   const channel = row.original
   const { setOpen, setCurrentRow, upstream } = useChannels()
@@ -103,6 +109,13 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const handleTest = () => {
     setCurrentRow(channel)
     setOpen('test-channel')
+  }
+
+  const handleQualityAudit = () => {
+    navigate({
+      to: '/channels/quality',
+      search: { channel: channel.id },
+    })
   }
 
   const handleDirectTest = async (e: React.MouseEvent<HTMLButtonElement>) => {
@@ -279,6 +292,17 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
               <PlugZap size={16} />
             </DropdownMenuShortcut>
           </DropdownMenuItem>
+
+          {(QUALITY_AUDIT_CHANNEL_TYPES as readonly number[]).includes(
+            channel.type
+          ) ? (
+            <DropdownMenuItem onClick={handleQualityAudit}>
+              {t('Quality audit')}
+              <DropdownMenuShortcut>
+                <ShieldCheck size={16} />
+              </DropdownMenuShortcut>
+            </DropdownMenuItem>
+          ) : null}
 
           {/* Query Balance */}
           <DropdownMenuItem onClick={handleQueryBalance}>

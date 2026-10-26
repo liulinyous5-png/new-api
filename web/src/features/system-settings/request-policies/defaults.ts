@@ -36,6 +36,8 @@ export type HealthSettings = {
     | 'scheduled_all'
     | 'auto_ban_only'
     | 'passive_recovery'
+  'monitor_setting.auto_quality_enabled': boolean
+  'monitor_setting.auto_quality_minutes': number
 }
 export type FilteringSettings = Pick<
   SecuritySettings,
@@ -59,6 +61,8 @@ export const defaultRequestPolicySettings: RequestPolicySettings = {
   'monitor_setting.auto_test_channel_minutes': 10,
   'monitor_setting.channel_test_concurrency': 1,
   'monitor_setting.channel_test_mode': 'scheduled_all',
+  'monitor_setting.auto_quality_enabled': false,
+  'monitor_setting.auto_quality_minutes': 60,
   'channel_affinity_setting.enabled': false,
   'channel_affinity_setting.session_mode': '',
   'channel_affinity_setting.switch_on_success': true,

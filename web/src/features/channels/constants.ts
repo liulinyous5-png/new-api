@@ -28,6 +28,15 @@ export const CHANNEL_PRIORITY_GUIDE_KEYS = {
 
 export const CHANNEL_TYPE_OLLAMA = 4
 
+export const CHANNEL_TYPE_ANTHROPIC = 14
+
+export const CHANNEL_TYPE_AWS = 33
+
+export const QUALITY_AUDIT_CHANNEL_TYPES = [
+  CHANNEL_TYPE_ANTHROPIC,
+  CHANNEL_TYPE_AWS,
+] as const
+
 export const CHANNEL_TYPE_SUB2API = 59
 
 export const CHANNEL_TYPE_NEW_API = 60

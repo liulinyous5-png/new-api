@@ -65,6 +65,8 @@ export const channelSchema = z.object({
   param_override: z.string().nullish(),
   header_override: z.string().nullish(),
   remark: z.string().default(''),
+  quality_auto_enabled: z.boolean().optional(),
+  quality_suite_id: z.number().optional(),
   max_input_tokens: z.number().default(0),
   channel_info: channelInfoSchema.default({
     is_multi_key: false,

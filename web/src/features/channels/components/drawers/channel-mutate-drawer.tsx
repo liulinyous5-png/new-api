@@ -134,6 +134,7 @@ import {
   getGroups,
   getPrefillGroups,
   getTaskPluginOptions,
+  listChannelQualitySuites,
   refreshCodexCredential,
 } from '../../api'
 import {
@@ -153,6 +154,7 @@ import {
   FIELD_PLACEHOLDERS,
   MODEL_FETCHABLE_TYPES,
   OPENAI_FIELD_PASSTHROUGH_TYPES,
+  QUALITY_AUDIT_CHANNEL_TYPES,
 } from '../../constants'
 import { useChannelKeyDisclosure } from '../../hooks/use-channel-key-disclosure'
 import {
@@ -545,6 +547,16 @@ export function ChannelMutateDrawer({
   })
 
   // Fetch available groups
+  const { data: qualitySuites } = useQuery({
+    queryKey: channelsQueryKeys.qualitySuites(),
+    queryFn: async () => {
+      const response = await listChannelQualitySuites()
+      requireServerSuccess(response)
+      return response.data ?? []
+    },
+    enabled: open,
+  })
+
   const { data: groupsData, isLoading: isLoadingGroups } = useQuery({
     queryKey: ['groups'],
     queryFn: async () => requireServerSuccess(await getGroups()),
@@ -2305,6 +2317,75 @@ export function ChannelMutateDrawer({
           </FormItem>
         )}
       />
+
+      {(QUALITY_AUDIT_CHANNEL_TYPES as readonly number[]).includes(
+        currentType
+      ) ? (
+        <>
+          <FormField
+            control={form.control}
+            name='quality_auto_enabled'
+            render={({ field }) => (
+              <FormItem className='flex items-center justify-between'>
+                <div className='space-y-0.5'>
+                  <FormLabel>{t('Auto quality check')}</FormLabel>
+                  <FormDescription>
+                    {t(
+                      'Run the bound suite on this channel during the scheduled quality scan. A failed scan does not disable the channel.'
+                    )}
+                  </FormDescription>
+                </div>
+                <FormControl>
+                  <Switch
+                    checked={field.value === true}
+                    onCheckedChange={field.onChange}
+                  />
+                </FormControl>
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name='quality_suite_id'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Quality suite')}</FormLabel>
+                <Select
+                  items={[
+                    { value: '0', label: t('No quality suite') },
+                    ...(qualitySuites ?? []).map((suite) => ({
+                      value: String(suite.id),
+                      label: suite.name,
+                    })),
+                  ]}
+                  value={String(field.value ?? 0)}
+                  onValueChange={(value) => field.onChange(Number(value))}
+                >
+                  <FormControl>
+                    <SelectTrigger className='w-full'>
+                      <SelectValue placeholder={t('Select a quality suite')} />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    <SelectItem value='0'>{t('No quality suite')}</SelectItem>
+                    {(qualitySuites ?? []).map((suite) => (
+                      <SelectItem key={suite.id} value={String(suite.id)}>
+                        {suite.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <FormDescription>
+                  {t(
+                    'Create suites on the quality audit page. The scan uses the channel default key.'
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </>
+      ) : null}
     </div>
   )
 
@@ -4417,12 +4498,12 @@ export function ChannelMutateDrawer({
                   )}
                 />
               )}
-                                                     {(currentType === 1 || currentType === 3) && (
-                                <AccountCredentialsField
-                                  control={form.control}
-                                  disabled={sensitiveLocked}
-                                />
-                              )}
+              {(currentType === 1 || currentType === 3) && (
+                <AccountCredentialsField
+                  control={form.control}
+                  disabled={sensitiveLocked}
+                />
+              )}
               <FormField
                 control={form.control}
                 name='key'
@@ -4507,10 +4588,9 @@ export function ChannelMutateDrawer({
                             </Button>
                           )}
                         </span>
-                         {(currentType === 1 ||
-                                        currentType === 3) && (
-                                        <AccountCredentialsHelp />
-                                      )}
+                        {(currentType === 1 || currentType === 3) && (
+                          <AccountCredentialsHelp />
+                        )}
                       </FormDescription>
                       {isEditing && canRevealChannelKey && (
                         <div className='border-border/60 mt-4 flex flex-col gap-3 border-y border-dashed py-4'>

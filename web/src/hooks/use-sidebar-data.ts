@@ -139,6 +139,12 @@ export function useSidebarData(): SidebarData {
             icon: Radio,
           },
           {
+            title: t('Quality audit'),
+            url: '/channels/quality',
+            configUrls: ['/channels'],
+            icon: ShieldCheck,
+          },
+          {
             title: t('Models'),
             url: '/models/metadata',
             icon: Box,

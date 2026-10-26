@@ -604,6 +604,9 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	if channel.Type == constant.ChannelTypeSGLang && strings.TrimSpace(channel.GetBaseURL()) == "" {
 		return fmt.Errorf("SGLang channel base URL cannot be empty")
 	}
+	if err := normalizeQualitySchedule(channel); err != nil {
+		return err
+	}
 
 	// 如果是添加操作，检查 channel 和 key 是否为空
 	if isAdd {
@@ -655,6 +658,48 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		}
 	}
 
+	return nil
+}
+
+func qualityScheduleEligible(channelType int) bool {
+	return channelType == constant.ChannelTypeAnthropic || channelType == constant.ChannelTypeAws
+}
+
+func normalizeQualitySchedule(channel *model.Channel) error {
+	if channel == nil {
+		return fmt.Errorf("channel cannot be empty")
+	}
+	if !qualityScheduleEligible(channel.Type) {
+		channel.QualityAutoEnabled = false
+		channel.QualitySuiteId = 0
+		return nil
+	}
+	if channel.QualitySuiteId < 0 {
+		channel.QualitySuiteId = 0
+	}
+	if channel.QualityAutoEnabled && channel.QualitySuiteId <= 0 {
+		return fmt.Errorf("a quality suite is required")
+	}
+	if channel.QualitySuiteId == 0 {
+		return nil
+	}
+	suite, err := model.GetChannelQualitySuite(channel.QualitySuiteId)
+	if err != nil {
+		return err
+	}
+	if suite == nil {
+		return fmt.Errorf("quality suite not found")
+	}
+	if !channel.QualityAutoEnabled {
+		return nil
+	}
+	items, err := model.ListChannelQualitySuiteItems(suite.Id)
+	if err != nil {
+		return err
+	}
+	if len(items) == 0 {
+		return fmt.Errorf("quality suite has no probes")
+	}
 	return nil
 }
 
@@ -1322,10 +1367,34 @@ func UpdateChannel(c *gin.Context) {
 		}
 	}
 
+	_, qualityEnabledSet := requestData["quality_auto_enabled"]
+	_, qualitySuiteSet := requestData["quality_suite_id"]
+	if !qualityEnabledSet {
+		channel.QualityAutoEnabled = originChannel.QualityAutoEnabled
+	}
+	if !qualitySuiteSet {
+		channel.QualitySuiteId = originChannel.QualitySuiteId
+	}
+	if err := normalizeQualitySchedule(&channel.Channel); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	qualityEnabled := channel.QualityAutoEnabled
+	qualitySuiteID := channel.QualitySuiteId
+	persistQualitySchedule := !qualityScheduleEligible(channel.Type) || qualityEnabledSet || qualitySuiteSet
+
 	err = channel.Update()
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if persistQualitySchedule {
+		if err := model.SaveChannelQualitySchedule(channel.Id, qualityEnabled, qualitySuiteID); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		channel.QualityAutoEnabled = qualityEnabled
+		channel.QualitySuiteId = qualitySuiteID
 	}
 	model.InitChannelCache()
 	if proxyChanged {

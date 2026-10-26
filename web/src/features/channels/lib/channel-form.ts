@@ -27,6 +27,7 @@ import {
   CHANNEL_TYPE_SGLANG,
   CHANNEL_STATUS,
   ERROR_MESSAGES,
+  QUALITY_AUDIT_CHANNEL_TYPES,
   FIELD_PASSTHROUGH_TYPES,
   MODEL_FETCHABLE_TYPES,
   OPENAI_FIELD_PASSTHROUGH_TYPES,
@@ -227,6 +228,8 @@ export const channelFormSchema = z
     weight: z.number().optional(),
     test_model: z.string().optional(),
     auto_ban: z.number().optional(),
+    quality_auto_enabled: z.boolean().optional(),
+    quality_suite_id: z.number().optional(),
     status: z.number(),
     status_code_mapping: z
       .string()
@@ -444,6 +447,13 @@ export const channelFormSchema = z
         ERROR_MESSAGES.INVALID_HTTP1_WITH_SHARDS
       )
     }
+    if (
+      (QUALITY_AUDIT_CHANNEL_TYPES as readonly number[]).includes(data.type) &&
+      data.quality_auto_enabled &&
+      (data.quality_suite_id ?? 0) <= 0
+    ) {
+      addRequiredIssue(ctx, 'quality_suite_id', 'a quality suite is required')
+    }
   })
 
 export type ChannelFormValues = z.infer<typeof channelFormSchema>
@@ -468,6 +478,8 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   weight: 0,
   test_model: '',
   auto_ban: 1,
+  quality_auto_enabled: false,
+  quality_suite_id: 0,
   status: CHANNEL_STATUS.ENABLED,
   status_code_mapping: '',
   tag: '',
@@ -640,6 +652,8 @@ export function transformChannelToFormDefaults(
     weight: channel.weight || 0,
     test_model: channel.test_model || '',
     auto_ban: channel.auto_ban ?? 1,
+    quality_auto_enabled: channel.quality_auto_enabled ?? false,
+    quality_suite_id: channel.quality_suite_id ?? 0,
     status: channel.status,
     status_code_mapping: channel.status_code_mapping || '',
     tag: channel.tag || '',
@@ -911,6 +925,8 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
     weight: formData.weight || null,
     test_model: formData.test_model || null,
     auto_ban: formData.auto_ban ?? 1,
+    quality_auto_enabled: formData.quality_auto_enabled ?? false,
+    quality_suite_id: formData.quality_suite_id ?? 0,
     status: formData.status,
     status_code_mapping: formData.status_code_mapping || null,
     tag: formData.tag || null,
@@ -962,6 +978,8 @@ export function transformFormDataToUpdatePayload(
     weight: formData.weight ?? 0,
     test_model: formData.test_model || null,
     auto_ban: formData.auto_ban ?? 1,
+    quality_auto_enabled: formData.quality_auto_enabled ?? false,
+    quality_suite_id: formData.quality_suite_id ?? 0,
     status_code_mapping: formData.status_code_mapping || null,
     tag: formData.tag || null,
     remark: formData.remark || '',

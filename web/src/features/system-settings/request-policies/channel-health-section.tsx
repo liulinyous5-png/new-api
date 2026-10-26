@@ -101,6 +101,15 @@ const createChannelHealthSchema = (
             t('Channel test concurrency must be between 1 and 32')
           ),
         channel_test_mode: z.enum(channelTestModes),
+        auto_quality_enabled: z.boolean(),
+        auto_quality_minutes: z.coerce
+          .number()
+          .int()
+          .min(1, t('auto quality interval must be between 1 and 1440 minutes'))
+          .max(
+            1440,
+            t('auto quality interval must be between 1 and 1440 minutes')
+          ),
       }),
     })
     .superRefine((values, ctx) => {
@@ -140,6 +149,8 @@ type NormalizedChannelHealthValues = {
   'monitor_setting.auto_test_channel_minutes': number
   'monitor_setting.channel_test_concurrency': number
   'monitor_setting.channel_test_mode': ChannelTestMode
+  'monitor_setting.auto_quality_enabled': boolean
+  'monitor_setting.auto_quality_minutes': number
 }
 
 function normalizeChannelTestMode(value?: string): ChannelTestMode {
@@ -169,6 +180,10 @@ const buildFormDefaults = (
     channel_test_mode: normalizeChannelTestMode(
       defaults['monitor_setting.channel_test_mode']
     ),
+    auto_quality_enabled:
+      defaults['monitor_setting.auto_quality_enabled'] ?? false,
+    auto_quality_minutes:
+      defaults['monitor_setting.auto_quality_minutes'] ?? 60,
   },
 })
 
@@ -193,6 +208,10 @@ const normalizeDefaults = (
   'monitor_setting.channel_test_mode': normalizeChannelTestMode(
     defaults['monitor_setting.channel_test_mode']
   ),
+  'monitor_setting.auto_quality_enabled':
+    defaults['monitor_setting.auto_quality_enabled'] ?? false,
+  'monitor_setting.auto_quality_minutes':
+    defaults['monitor_setting.auto_quality_minutes'] ?? 60,
 })
 
 const normalizeFormValues = (
@@ -214,6 +233,10 @@ const normalizeFormValues = (
   'monitor_setting.channel_test_concurrency':
     values.monitor_setting.channel_test_concurrency,
   'monitor_setting.channel_test_mode': values.monitor_setting.channel_test_mode,
+  'monitor_setting.auto_quality_enabled':
+    values.monitor_setting.auto_quality_enabled,
+  'monitor_setting.auto_quality_minutes':
+    values.monitor_setting.auto_quality_minutes,
 })
 
 export function ChannelHealthSection({
@@ -481,6 +504,64 @@ export function ChannelHealthSection({
                       />
                     </FormControl>
                   </SettingsSwitchItem>
+                )}
+              />
+            </SettingsFormGrid>
+          </div>
+
+          <Separator />
+
+          <div className='flex min-w-0 flex-col gap-4'>
+            <h4 className='text-sm font-medium'>
+              {t('Scheduled quality scan')}
+            </h4>
+            <SettingsFormGrid>
+              <FormField
+                control={form.control}
+                name='monitor_setting.auto_quality_enabled'
+                render={({ field }) => (
+                  <SettingsSwitchItem>
+                    <SettingsSwitchContent>
+                      <FormLabel>{t('Auto quality check')}</FormLabel>
+                      <FormDescription>
+                        {t(
+                          'Run the suite bound to each enabled channel. A failed scan does not disable the channel.'
+                        )}
+                      </FormDescription>
+                    </SettingsSwitchContent>
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                      />
+                    </FormControl>
+                  </SettingsSwitchItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name='monitor_setting.auto_quality_minutes'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      {t('Quality scan interval (minutes)')}
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={1}
+                        max={1440}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'How often to run the scheduled quality scan. The interval is 1 to 1440 minutes.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
                 )}
               />
             </SettingsFormGrid>

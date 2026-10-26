@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 /* eslint-disable react-refresh/only-export-components */
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ColumnDef } from '@tanstack/react-table'
 import {
   AlertTriangle,
@@ -56,11 +56,16 @@ import { formatTimestampToDate } from '@/lib/format'
 import { handleServerError } from '@/lib/handle-server-error'
 import {
   createServerError,
+  requireServerSuccess,
   translateServerText,
 } from '@/lib/server-error-message'
 import { truncateText } from '@/lib/utils'
 
-import { getCodexUsage, updateChannelBalance } from '../api'
+import {
+  getCodexUsage,
+  listLatestChannelQuality,
+  updateChannelBalance,
+} from '../api'
 import {
   CHANNEL_STATUS_CONFIG,
   CHANNEL_TYPE_TASK_PLUGIN,
@@ -94,6 +99,7 @@ import { useChannels } from './channels-provider'
 import { DataTableRowActions } from './data-table-row-actions'
 import { DataTableTagRowActions } from './data-table-tag-row-actions'
 import { BalanceQueryDialog } from './dialogs/balance-query-dialog'
+import { ChannelQualityVerdictBadge } from './dialogs/channel-quality-verdict'
 import {
   CodexUsageDialog,
   type CodexUsageDialogData,
@@ -613,6 +619,25 @@ export function BalanceCell({ channel }: { channel: Channel }) {
       )}
     </TooltipProvider>
   )
+}
+
+function ChannelQualityCell(props: { channelId: number }) {
+  const { data } = useQuery({
+    queryKey: channelsQueryKeys.qualityLatest(),
+    queryFn: async () => {
+      const response = await listLatestChannelQuality()
+      requireServerSuccess(response)
+      return response.data ?? []
+    },
+    staleTime: 15_000,
+  })
+  const verdict = data?.find(
+    (item) => item.channel_id === props.channelId
+  )?.verdict
+  if (!verdict) {
+    return <span className='text-muted-foreground text-xs'>-</span>
+  }
+  return <ChannelQualityVerdictBadge verdict={verdict} />
 }
 
 /**
@@ -1178,6 +1203,15 @@ export function useChannelsColumns(
         header: t('Used / Remaining'),
         cell: ({ row }) => <BalanceCell channel={row.original} />,
         size: 180,
+      },
+
+      {
+        id: 'quality',
+        header: t('Quality'),
+        meta: { mobileHidden: true },
+        cell: ({ row }) => <ChannelQualityCell channelId={row.original.id} />,
+        size: 120,
+        enableSorting: false,
       },
 
       // Response Time column

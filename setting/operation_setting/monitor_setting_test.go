@@ -82,6 +82,30 @@ func TestGetMonitorSettingNormalizesChannelTestConcurrency(t *testing.T) {
 	}
 }
 
+func TestValidateAutoQualityMinutesAllowsOneMinute(t *testing.T) {
+	require.NoError(t, ValidateAutoQualityMinutes("1"))
+	require.NoError(t, ValidateAutoQualityMinutes("1440"))
+	assert.Error(t, ValidateAutoQualityMinutes("0"))
+	assert.Error(t, ValidateAutoQualityMinutes("1441"))
+	assert.EqualError(t, ValidateAutoQualityMinutes("0"), "auto quality interval must be between 1 and 1440 minutes")
+}
+
+func TestGetMonitorSettingKeepsOneMinuteQualityInterval(t *testing.T) {
+	orig := monitorSetting
+	t.Cleanup(func() { monitorSetting = orig })
+	t.Setenv("CHANNEL_TEST_ENABLED", "")
+	t.Setenv("CHANNEL_TEST_FREQUENCY", "")
+
+	monitorSetting = MonitorSetting{AutoQualityMinutes: 1}
+	setting := GetMonitorSetting()
+	require.NotNil(t, setting)
+	assert.Equal(t, float64(1), setting.AutoQualityMinutes)
+
+	monitorSetting = MonitorSetting{AutoQualityMinutes: 0}
+	setting = GetMonitorSetting()
+	assert.Equal(t, float64(60), setting.AutoQualityMinutes)
+}
+
 func TestValidateChannelTestConcurrency(t *testing.T) {
 	require.NoError(t, ValidateChannelTestConcurrency("1"))
 	require.NoError(t, ValidateChannelTestConcurrency("32"))
