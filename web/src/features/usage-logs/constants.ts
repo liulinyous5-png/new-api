@@ -113,7 +113,8 @@ export const LOG_TYPE_FILTERS = [
       value: String(type.value),
       deprecated:
         type.value === LOG_TYPE_ENUM.MANAGE ||
-        type.value === LOG_TYPE_ENUM.LOGIN,
+        type.value === LOG_TYPE_ENUM.LOGIN ||
+        type.value === LOG_TYPE_ENUM.ERROR,
     })
   ),
 ] as const
@@ -340,6 +341,7 @@ export const TASK_PLATFORM_MAPPINGS: Record<string, StatusMapping> = {
  */
 export const LOG_CATEGORY_LABELS: Record<LogCategory, string> = {
   common: 'Common',
+  error: 'Error',
   drawing: 'Drawing',
   task: 'Task',
 }

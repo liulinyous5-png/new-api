@@ -36,6 +36,22 @@ func logFilterFromQuery(c *gin.Context, admin bool) model.LogFilter {
 	return filter
 }
 
+const logQueryHalfWindow int64 = 3600
+
+// defaultLogQueryWindow fills a usage-log search that has no time bounds with
+// one hour before and one hour after now. An explicit range is unchanged.
+func defaultLogQueryWindow(startTimestamp int64, endTimestamp int64) (int64, int64) {
+	if startTimestamp != 0 || endTimestamp != 0 {
+		return startTimestamp, endTimestamp
+	}
+	now := common.GetTimestamp()
+	return now - logQueryHalfWindow, now + logQueryHalfWindow
+}
+
+func applyDefaultLogQueryWindow(filter *model.LogFilter) {
+	filter.StartTimestamp, filter.EndTimestamp = defaultLogQueryWindow(filter.StartTimestamp, filter.EndTimestamp)
+}
+
 // limitLogTimeRange returns the start of a log or dashboard search kept within
 // the longest log time range. A missing start reaches back the whole range, and
 // time after now does not count toward it.
@@ -56,7 +72,9 @@ func limitLogTimeRange(startTimestamp int64, endTimestamp int64) (int64, error) 
 
 func GetAllLogs(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
-	logs, total, err := model.GetAllLogs(logFilterFromQuery(c, true), pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	filter := logFilterFromQuery(c, true)
+	applyDefaultLogQueryWindow(&filter)
+	logs, total, err := model.GetAllLogs(filter, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -75,6 +93,7 @@ func GetAllLogs(c *gin.Context) {
 func GetUserLogs(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	filter := logFilterFromQuery(c, false)
+	applyDefaultLogQueryWindow(&filter)
 	if c.GetInt("role") < common.RoleAdminUser {
 		startTimestamp, err := limitLogTimeRange(filter.StartTimestamp, filter.EndTimestamp)
 		if err != nil {
@@ -96,7 +115,7 @@ func GetUserLogs(c *gin.Context) {
 
 // ExportAllLogs streams every user's logs matching the search.
 func ExportAllLogs(c *gin.Context) {
-	exportLogs(c, true)
+	exportLogs(c, true, false)
 }
 
 // ExportUserLogs streams the caller's own logs matching the search.
@@ -105,21 +124,80 @@ func ExportUserLogs(c *gin.Context) {
 		common.ApiErrorT(c, "Log export is disabled")
 		return
 	}
-	exportLogs(c, false)
+	exportLogs(c, false, false)
+}
+
+func GetAllErrorLogs(c *gin.Context) {
+	pageInfo := common.GetPageQuery(c)
+	filter := logFilterFromQuery(c, true)
+	filter.Type = model.LogTypeUnknown
+	applyDefaultLogQueryWindow(&filter)
+	logs, total, err := model.GetAllErrorLogs(filter, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if c.GetInt("role") < common.RoleRootUser {
+		model.FormatAdminLogs(logs)
+	} else {
+		model.FormatRootLogs(logs)
+	}
+	pageInfo.SetTotal(int(total))
+	pageInfo.SetItems(logs)
+	common.ApiSuccess(c, pageInfo)
+}
+
+func GetUserErrorLogs(c *gin.Context) {
+	pageInfo := common.GetPageQuery(c)
+	filter := logFilterFromQuery(c, false)
+	filter.Type = model.LogTypeUnknown
+	applyDefaultLogQueryWindow(&filter)
+	if c.GetInt("role") < common.RoleAdminUser {
+		startTimestamp, err := limitLogTimeRange(filter.StartTimestamp, filter.EndTimestamp)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		filter.StartTimestamp = startTimestamp
+	}
+	logs, total, err := model.GetUserErrorLogs(c.GetInt("id"), filter, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	pageInfo.SetTotal(int(total))
+	pageInfo.SetItems(logs)
+	common.ApiSuccess(c, pageInfo)
+}
+
+func ExportAllErrorLogs(c *gin.Context) {
+	exportLogs(c, true, true)
+}
+
+func ExportUserErrorLogs(c *gin.Context) {
+	if c.GetInt("role") < common.RoleAdminUser && !operation_setting.GetLogSetting().UserExportEnabled {
+		common.ApiErrorT(c, "Log export is disabled")
+		return
+	}
+	exportLogs(c, false, true)
 }
 
 // exportLogs writes one JSON log per line, newest first, and ends with an API
 // response object: success with the log count, or the failure. Each user runs
 // one export at a time, and every export stays within the longest log time
 // range.
-func exportLogs(c *gin.Context, all bool) {
+func exportLogs(c *gin.Context, all bool, errorLogs bool) {
 	filter := logFilterFromQuery(c, all)
+	applyDefaultLogQueryWindow(&filter)
 	startTimestamp, err := limitLogTimeRange(filter.StartTimestamp, filter.EndTimestamp)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	filter.StartTimestamp = startTimestamp
+	if errorLogs {
+		filter.Type = model.LogTypeUnknown
+	}
 
 	userId := c.GetInt("id")
 	release, ok, err := service.AcquireLogExportLock(userId)
@@ -152,7 +230,11 @@ func exportLogs(c *gin.Context, all bool) {
 		return nil
 	}
 	ctx := c.Request.Context()
-	if all {
+	if errorLogs && all {
+		err = model.StreamAllErrorLogs(ctx, filter, c.GetInt("role"), writeLog)
+	} else if errorLogs {
+		err = model.StreamUserErrorLogs(ctx, userId, filter, writeLog)
+	} else if all {
 		err = model.StreamAllLogs(ctx, filter, c.GetInt("role"), writeLog)
 	} else {
 		err = model.StreamUserLogs(ctx, userId, filter, writeLog)
@@ -204,6 +286,7 @@ func GetLogsStat(c *gin.Context) {
 	logType, _ := strconv.Atoi(c.Query("type"))
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
+	startTimestamp, endTimestamp = defaultLogQueryWindow(startTimestamp, endTimestamp)
 	tokenName := c.Query("token_name")
 	username := c.Query("username")
 	modelName := c.Query("model_name")
@@ -232,6 +315,7 @@ func GetLogsSelfStat(c *gin.Context) {
 	logType, _ := strconv.Atoi(c.Query("type"))
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
+	startTimestamp, endTimestamp = defaultLogQueryWindow(startTimestamp, endTimestamp)
 	if c.GetInt("role") < common.RoleAdminUser {
 		var err error
 		if startTimestamp, err = limitLogTimeRange(startTimestamp, endTimestamp); err != nil {

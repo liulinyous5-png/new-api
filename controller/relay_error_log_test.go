@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -32,7 +33,7 @@ func TestProcessChannelErrorUsesSnapshotWithoutLeakingChannelMetadata(t *testing
 	sqlDB, err := database.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	require.NoError(t, database.AutoMigrate(&model.User{}, &model.Log{}))
+	require.NoError(t, database.AutoMigrate(&model.User{}, &model.Log{}, &model.ErrorLog{}))
 	model.DB, model.LOG_DB = database, database
 	common.RedisEnabled = false
 	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
@@ -71,8 +72,13 @@ func TestProcessChannelErrorUsesSnapshotWithoutLeakingChannelMetadata(t *testing
 
 	processChannelError(ctx, channelSnapshot, apiErr, nil)
 
-	var stored model.Log
+	var usageCount int64
+	require.NoError(t, database.Model(&model.Log{}).Count(&usageCount).Error)
+	assert.Zero(t, usageCount)
+
+	var stored model.ErrorLog
 	require.NoError(t, database.First(&stored).Error)
+	assert.Equal(t, model.LogTypeError, stored.Type)
 	assert.Equal(t, channelSnapshot.ChannelId, stored.ChannelId)
 	storedOther, err := common.StrToMap(stored.Other)
 	require.NoError(t, err)
@@ -84,7 +90,17 @@ func TestProcessChannelErrorUsesSnapshotWithoutLeakingChannelMetadata(t *testing
 	require.True(t, ok)
 	assert.Equal(t, []any{"101"}, adminInfo["use_channel"])
 
-	logs, total, err := model.GetUserLogs(7, model.LogFilter{Type: model.LogTypeError}, 0, 10)
+	missed, missedTotal, err := model.GetUserLogs(7, model.LogFilter{Type: model.LogTypeError}, 0, 10)
+	require.NoError(t, err)
+	assert.Zero(t, missedTotal)
+	assert.Empty(t, missed)
+
+	require.NoError(t, database.Create(&model.ErrorLog{UserId: 7, CreatedAt: 1, Type: model.LogTypeError, RequestId: "old-error"}).Error)
+	deleted, err := model.DeleteOldLogBatch(context.Background(), 2, 100)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), deleted)
+
+	logs, total, err := model.GetUserErrorLogs(7, model.LogFilter{}, 0, 10)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), total)
 	require.Len(t, logs, 1)

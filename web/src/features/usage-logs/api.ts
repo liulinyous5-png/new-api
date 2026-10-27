@@ -88,6 +88,13 @@ export const getUserLogStats = (
   params: Omit<GetLogStatsParams, 'username' | 'channel'> = {}
 ) => fetchLogStats('/api/log', params, false)
 
+export const getAllErrorLogs = (params: GetLogsParams = {}) =>
+  fetchLogs('/api/log/error', params, true)
+
+export const getUserErrorLogs = (
+  params: Omit<GetLogsParams, 'username' | 'channel'> = {}
+) => fetchLogs('/api/log/error', params, false)
+
 /**
  * Stream the logs matching params, newest first. The server sends one JSON
  * log per line and ends with an API response object; a stream that ends
@@ -96,13 +103,14 @@ export const getUserLogStats = (
 export async function exportLogs(
   params: GetLogsParams,
   isAdmin: boolean,
-  options: { signal: AbortSignal; onLog: (log: UsageLog) => void }
+  options: { signal: AbortSignal; onLog: (log: UsageLog) => void },
+  endpoint = '/api/log'
 ): Promise<number> {
   const queryParams = buildQueryParams(
     params as unknown as Record<string, unknown>
   )
   const response = await fetch(
-    `${buildApiPath('/api/log', isAdmin)}/export?${queryParams}`,
+    `${buildApiPath(endpoint, isAdmin)}/export?${queryParams}`,
     {
       credentials: 'include',
       headers: await getFreshAuthHeaders(),

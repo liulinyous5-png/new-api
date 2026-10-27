@@ -56,7 +56,7 @@ func seedExportLogs(t *testing.T, mainDB *gorm.DB, logDB *gorm.DB, now int64) {
 	t.Helper()
 	require.NoError(t, mainDB.Create(&model.Channel{Id: 9, Name: "primary"}).Error)
 	logs := []model.Log{
-		{UserId: 1, Username: "alice", CreatedAt: now - 3600, Type: model.LogTypeConsume, ModelName: "gpt-a", ChannelId: 9, Quota: 10, RequestId: "a-1", Other: `{"admin_info":{"use_channel":["9"]}}`},
+		{UserId: 1, Username: "alice", CreatedAt: now - 3000, Type: model.LogTypeConsume, ModelName: "gpt-a", ChannelId: 9, Quota: 10, RequestId: "a-1", Other: `{"admin_info":{"use_channel":["9"]}}`},
 		{UserId: 2, Username: "bob", CreatedAt: now - 1800, Type: model.LogTypeConsume, ModelName: "gpt-b", ChannelId: 9, Quota: 20, RequestId: "b-1"},
 		{UserId: 1, Username: "alice", CreatedAt: now - 60, Type: model.LogTypeError, ModelName: "gpt-a", RequestId: "a-2"},
 		{UserId: 1, Username: "alice", CreatedAt: now - 400*24*3600, Type: model.LogTypeConsume, ModelName: "gpt-a", RequestId: "a-old"},
@@ -113,6 +113,9 @@ func TestLogExportDatabaseMatrix(t *testing.T) {
 				require.NoError(t, model.InitLogDB())
 			} else {
 				require.NoError(t, db.AutoMigrate(&model.Log{}))
+				t.Setenv("LOG_SQL_DSN", "")
+				require.NoError(t, model.InitLogDB())
+				require.True(t, model.LOG_DB.Migrator().HasTable(&model.ErrorLog{}))
 			}
 			versionSQL := "SELECT version()"
 			if tc.kind == "sqlite" {
@@ -173,6 +176,7 @@ func TestLogExportRules(t *testing.T) {
 		assert.Equal(t, false, callLogHandler(t, GetUserLogs, 1, common.RoleCommonUser, tooLong)[0]["success"])
 		assert.Equal(t, false, callLogHandler(t, GetLogsSelfStat, 1, common.RoleCommonUser, tooLong)[0]["success"])
 		assert.Equal(t, true, callLogHandler(t, GetUserLogs, 3, common.RoleAdminUser, tooLong)[0]["success"], "administrators search their own logs without a limit")
+		assert.Equal(t, true, callLogHandler(t, GetAllLogs, 3, common.RoleAdminUser, tooLong)[0]["success"])
 
 		// The dashboard follows the same range instead of its old one-month limit.
 		fortyDays := fmt.Sprintf("start_timestamp=%d&end_timestamp=%d", now-40*24*3600, now)
@@ -181,7 +185,7 @@ func TestLogExportRules(t *testing.T) {
 			assert.Equal(t, true, callLogHandler(t, handler, 1, common.RoleCommonUser, fortyDays)[0]["success"])
 		}
 
-		// Without a start, a user's search reaches back the whole range.
+		// Without a start, a search covers the hour before and after now.
 		listed := callLogHandler(t, GetUserLogs, 1, common.RoleCommonUser, "")[0]
 		assert.Equal(t, true, listed["success"])
 		assert.EqualValues(t, 2, listed["data"].(map[string]any)["total"])

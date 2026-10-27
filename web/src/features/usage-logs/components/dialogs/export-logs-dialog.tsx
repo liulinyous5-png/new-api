@@ -35,7 +35,7 @@ import {
   getLogCsvRow,
   toCsvLine,
 } from '../../lib/export'
-import { buildApiParams, getDefaultTimeRange } from '../../lib/utils'
+import { buildApiParams, getLogQueryTimeRange } from '../../lib/utils'
 import { CompactDateTimeRangePicker } from '../compact-date-time-range-picker'
 import { useLogsViewScope } from '../usage-logs-provider'
 
@@ -51,6 +51,7 @@ const DEFAULT_MAX_RANGE_DAYS = 365
 export function ExportLogsDialog() {
   const { t } = useTranslation()
   const searchParams = route.useSearch()
+  const section = route.useParams().section === 'error' ? 'error' : 'common'
   const { canManageScope, isAdminView } = useLogsViewScope()
   const { status } = useStatus()
   const [open, setOpen] = useState(false)
@@ -79,7 +80,7 @@ export function ExportLogsDialog() {
 
   const handleOpenChange = (nextOpen: boolean) => {
     if (nextOpen) {
-      const defaults = getDefaultTimeRange()
+      const defaults = getLogQueryTimeRange()
       setRange({
         start: searchParams.startTime
           ? new Date(searchParams.startTime)
@@ -101,14 +102,16 @@ export function ExportLogsDialog() {
     const lines = [toCsvLine(getLogCsvHeader(isAdminView, t))]
     setExportedCount(0)
     try {
+      const params = buildApiParams({
+        page: 1,
+        pageSize: 1,
+        searchParams,
+        isAdmin: isAdminView,
+      })
+      if (section === 'error') delete params.type
       const count = await exportLogs(
         {
-          ...buildApiParams({
-            page: 1,
-            pageSize: 1,
-            searchParams,
-            isAdmin: isAdminView,
-          }),
+          ...params,
           p: undefined,
           page_size: undefined,
           start_timestamp: Math.floor(range.start.getTime() / 1000),
@@ -121,7 +124,8 @@ export function ExportLogsDialog() {
             lines.push(toCsvLine(getLogCsvRow(log, isAdminView, t)))
             if (lines.length % 500 === 0) setExportedCount(lines.length - 1)
           },
-        }
+        },
+        section === 'error' ? '/api/log/error' : '/api/log'
       )
       downloadCsv(
         `usage-logs-${dayjs(range.start).format('YYYYMMDD')}-${dayjs(range.end).format('YYYYMMDD')}.csv`,

@@ -238,9 +238,12 @@ func InitLogDB() (err error) {
 		common.SetLogDatabaseType(common.MainDatabaseType())
 		initCol()
 		if common.IsMasterNode {
-			return MigrateAuditLogs()
+			if err := MigrateAuditLogs(); err != nil {
+				return err
+			}
+			return LOG_DB.AutoMigrate(&ErrorLog{})
 		}
-		return
+		return nil
 	}
 	db, dbType, err := chooseDB("LOG_SQL_DSN", true)
 	if err == nil {
@@ -409,15 +412,23 @@ func migrateLOGDB() error {
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		return migrateClickHouseLogDB()
 	}
-	return LOG_DB.AutoMigrate(&Log{})
+	if err := LOG_DB.AutoMigrate(&Log{}); err != nil {
+		return err
+	}
+	return LOG_DB.AutoMigrate(&ErrorLog{})
 }
 
 func migrateClickHouseLogDB() error {
 	ttlDays := clickHouseLogTTLDays()
-	if err := LOG_DB.Exec(clickHouseLogCreateTableSQL(ttlDays)).Error; err != nil {
-		return err
+	for _, table := range []string{"logs", "error_logs"} {
+		if err := LOG_DB.Exec(clickHouseCreateLogTableSQL(table, ttlDays)).Error; err != nil {
+			return err
+		}
+		if err := syncClickHouseLogTTL(table, ttlDays); err != nil {
+			return err
+		}
 	}
-	return syncClickHouseLogTTL(ttlDays)
+	return nil
 }
 
 func clickHouseLogTTLDays() int {
@@ -444,8 +455,12 @@ func clickHouseLogTTLClause(ttlDays int) string {
 }
 
 func clickHouseLogCreateTableSQL(ttlDays int) string {
+	return clickHouseCreateLogTableSQL("logs", ttlDays)
+}
+
+func clickHouseCreateLogTableSQL(table string, ttlDays int) string {
 	return fmt.Sprintf(`
-CREATE TABLE IF NOT EXISTS logs (
+CREATE TABLE IF NOT EXISTS %s (
 	id Int64 DEFAULT 0,
 	user_id Int32 DEFAULT 0,
 	created_at Int64 DEFAULT 0,
@@ -469,28 +484,28 @@ CREATE TABLE IF NOT EXISTS logs (
 )
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(toDateTime(created_at))
-ORDER BY (created_at, request_id)%s`, clickHouseLogTTLClause(ttlDays))
+ORDER BY (created_at, request_id)%s`, table, clickHouseLogTTLClause(ttlDays))
 }
 
-func syncClickHouseLogTTL(ttlDays int) error {
+func syncClickHouseLogTTL(table string, ttlDays int) error {
 	expression := clickHouseLogTTLExpression(ttlDays)
 	if expression != "" {
-		return LOG_DB.Exec("ALTER TABLE logs MODIFY TTL " + expression).Error
+		return LOG_DB.Exec("ALTER TABLE " + table + " MODIFY TTL " + expression).Error
 	}
 
-	hasTTL, err := clickHouseLogTableHasTTL()
+	hasTTL, err := clickHouseLogTableHasTTL(table)
 	if err != nil {
 		return err
 	}
 	if !hasTTL {
 		return nil
 	}
-	return LOG_DB.Exec("ALTER TABLE logs REMOVE TTL").Error
+	return LOG_DB.Exec("ALTER TABLE " + table + " REMOVE TTL").Error
 }
 
-func clickHouseLogTableHasTTL() (bool, error) {
+func clickHouseLogTableHasTTL(table string) (bool, error) {
 	var createTableSQL string
-	if err := LOG_DB.Raw("SHOW CREATE TABLE logs").Scan(&createTableSQL).Error; err != nil {
+	if err := LOG_DB.Raw("SHOW CREATE TABLE " + table).Scan(&createTableSQL).Error; err != nil {
 		return false, err
 	}
 	return clickHouseCreateTableHasTTL(createTableSQL), nil
