@@ -24,6 +24,7 @@ import { SectionPageLayout } from '@/components/layout'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { EndpointTestPanel } from '@/features/endpoint-audit/test-panel'
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
@@ -49,6 +50,7 @@ import type { Channel } from './types'
 
 type ChannelQualityPageProps = {
   channelId?: number
+  initialTab?: 'suites' | 'probes' | 'records' | 'endpoint'
   onSelectChannel: (channelId: number) => void
 }
 
@@ -123,11 +125,12 @@ export function ChannelQualityPage(props: ChannelQualityPageProps) {
     <SectionPageLayout>
       <SectionPageLayout.Title>{t('Quality audit')}</SectionPageLayout.Title>
       <SectionPageLayout.Content>
-        <Tabs defaultValue='records' className='gap-4'>
+        <Tabs defaultValue={props.initialTab ?? 'suites'} className='gap-4'>
           <TabsList className='max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto'>
-            <TabsTrigger value='records'>{t('Audit records')}</TabsTrigger>
-            <TabsTrigger value='probes'>{t('Manage probes')}</TabsTrigger>
             <TabsTrigger value='suites'>{t('Manage suites')}</TabsTrigger>
+            <TabsTrigger value='probes'>{t('Manage probes')}</TabsTrigger>
+            <TabsTrigger value='records'>{t('Audit records')}</TabsTrigger>
+            <TabsTrigger value='endpoint'>{t('Endpoint audit')}</TabsTrigger>
           </TabsList>
           <TabsContent value='records' className='flex flex-col gap-4'>
             <p className='text-muted-foreground text-sm'>
@@ -179,6 +182,9 @@ export function ChannelQualityPage(props: ChannelQualityPageProps) {
               )}
             </p>
             <ChannelQualitySuites canWrite={canWrite} />
+          </TabsContent>
+          <TabsContent value='endpoint'>
+            <EndpointTestPanel />
           </TabsContent>
         </Tabs>
       </SectionPageLayout.Content>

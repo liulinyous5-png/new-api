@@ -398,6 +398,9 @@ func migrateDB() error {
 	if err := EnsureBuiltinChannelQualityProbe(); err != nil {
 		return err
 	}
+	if err := MigrateEndpointAudit(); err != nil {
+		return err
+	}
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
 			return err

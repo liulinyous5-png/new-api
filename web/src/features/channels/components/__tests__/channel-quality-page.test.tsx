@@ -166,7 +166,15 @@ afterEach(() => {
 })
 
 it('hides channels that are not Anthropic or AWS', async () => {
+  const user = userEvent.setup()
   renderPage(channel(1), null)
+  expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+    'Manage suites',
+    'Manage probes',
+    'Audit records',
+    'Endpoint audit',
+  ])
+  await user.click(await screen.findByRole('tab', { name: 'Audit records' }))
   await waitFor(() => {
     const channelCalls = vi
       .mocked(api.get)
@@ -184,7 +192,9 @@ it('hides channels that are not Anthropic or AWS', async () => {
 })
 
 it('lets an AWS channel run a Messages audit', async () => {
+  const user = userEvent.setup()
   renderPage(channel(CHANNEL_TYPE_AWS), null)
+  await user.click(await screen.findByRole('tab', { name: 'Audit records' }))
   expect(await screen.findByRole('button', { name: 'Run audit' })).toBeEnabled()
   expect(
     screen.queryByText(
@@ -216,6 +226,7 @@ it('opens the suite dialog from the quality page', async () => {
 it('shows the passed verdict and opens the result details', async () => {
   const user = userEvent.setup()
   renderPage(channel(CHANNEL_TYPE_ANTHROPIC), passedRun())
+  await user.click(await screen.findByRole('tab', { name: 'Audit records' }))
   const record = await screen.findByRole('button', { name: /clear_tool_uses/ })
   expect(record).toHaveTextContent('Passed')
   expect(record).toHaveTextContent('claude-opus-4-7')

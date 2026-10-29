@@ -25,6 +25,10 @@ import { useAuthStore } from '@/stores/auth-store'
 
 const channelQualitySearchSchema = z.object({
   channel: z.number().optional().catch(undefined),
+  tab: z
+    .enum(['suites', 'probes', 'records', 'endpoint'])
+    .optional()
+    .catch(undefined),
 })
 
 export const Route = createFileRoute('/_authenticated/channels/quality')({
@@ -48,8 +52,11 @@ function ChannelQualityRoute() {
   return (
     <ChannelQualityPage
       channelId={search.channel}
+      initialTab={search.tab}
       onSelectChannel={(channelId) => {
-        navigate({ search: { channel: channelId } })
+        navigate({
+          search: (prev) => ({ ...prev, channel: channelId }),
+        })
       }}
     />
   )
