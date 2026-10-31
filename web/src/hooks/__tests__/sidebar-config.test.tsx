@@ -177,6 +177,7 @@ describe('audit log sidebar entry', () => {
       .flatMap((group) => group.items)
       .map((item) => item.title)
     expect(titles).not.toContain('Usage Logs')
+    expect(titles).not.toContain('Error Logs')
     expect(titles).toContain('Audit Logs')
   })
 })

@@ -56,7 +56,7 @@ func seedExportLogs(t *testing.T, mainDB *gorm.DB, logDB *gorm.DB, now int64) {
 	t.Helper()
 	require.NoError(t, mainDB.Create(&model.Channel{Id: 9, Name: "primary"}).Error)
 	logs := []model.Log{
-		{UserId: 1, Username: "alice", CreatedAt: now - 3600, Type: model.LogTypeConsume, ModelName: "gpt-a", ChannelId: 9, Quota: 10, RequestId: "a-1", Other: `{"admin_info":{"use_channel":["9"]}}`},
+		{UserId: 1, Username: "alice", CreatedAt: now - 3000, Type: model.LogTypeConsume, ModelName: "gpt-a", ChannelId: 9, Quota: 10, RequestId: "a-1", Other: `{"admin_info":{"use_channel":["9"]}}`},
 		{UserId: 2, Username: "bob", CreatedAt: now - 1800, Type: model.LogTypeConsume, ModelName: "gpt-b", ChannelId: 9, Quota: 20, RequestId: "b-1"},
 		{UserId: 1, Username: "alice", CreatedAt: now - 60, Type: model.LogTypeError, ModelName: "gpt-a", RequestId: "a-2"},
 		{UserId: 1, Username: "alice", CreatedAt: now - 400*24*3600, Type: model.LogTypeConsume, ModelName: "gpt-a", RequestId: "a-old"},
@@ -113,6 +113,9 @@ func TestLogExportDatabaseMatrix(t *testing.T) {
 				require.NoError(t, model.InitLogDB())
 			} else {
 				require.NoError(t, db.AutoMigrate(&model.Log{}))
+				t.Setenv("LOG_SQL_DSN", "")
+				require.NoError(t, model.InitLogDB())
+				require.True(t, model.LOG_DB.Migrator().HasTable(&model.ErrorLog{}))
 			}
 			versionSQL := "SELECT version()"
 			if tc.kind == "sqlite" {
@@ -150,6 +153,125 @@ func TestLogExportDatabaseMatrix(t *testing.T) {
 	}
 }
 
+// Exercise the real startup path with shared and separate log databases. The
+// pre-merge Log schema is unchanged; removing only error_logs recreates the
+// legacy layout without changing or copying its existing log rows.
+func TestErrorLogDatabaseMatrix(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousMaster := common.IsMasterNode
+	common.IsMasterNode = true
+	t.Cleanup(func() { common.IsMasterNode = previousMaster })
+	for _, tc := range []struct {
+		kind, env string
+		typ       common.DatabaseType
+	}{
+		{"sqlite", "", common.DatabaseTypeSQLite},
+		{"mysql", "AUDIT_MYSQL_DSN", common.DatabaseTypeMySQL},
+		{"postgres", "AUDIT_POSTGRES_DSN", common.DatabaseTypePostgreSQL},
+		{"clickhouse", "AUDIT_CLICKHOUSE_DSN", common.DatabaseTypeClickHouse},
+	} {
+		for _, separate := range []bool{false, true} {
+			if tc.kind == "clickhouse" && !separate {
+				continue
+			}
+			t.Run(fmt.Sprintf("%s/separate=%v", tc.kind, separate), func(t *testing.T) {
+				dsn := os.Getenv(tc.env)
+				if tc.env != "" && dsn == "" {
+					t.Skip(tc.env + " is not configured")
+				}
+				db, isolatedDSN := newAuditTestDatabase(t, tc.kind, dsn)
+				mainDB, mainType := db, tc.typ
+				if separate {
+					mainDB, _ = newAuditTestDatabase(t, "sqlite", "")
+					mainType = common.DatabaseTypeSQLite
+				}
+				useLogExportDatabases(t, mainDB, db, mainType, tc.typ)
+				require.NoError(t, mainDB.AutoMigrate(&model.Channel{}))
+				if separate {
+					t.Setenv("LOG_SQL_DSN", isolatedDSN)
+					if tc.kind == "sqlite" {
+						previousPath := common.SQLitePath
+						common.SQLitePath = isolatedDSN
+						t.Cleanup(func() { common.SQLitePath = previousPath })
+						t.Setenv("LOG_SQL_DSN", "local")
+					}
+				} else {
+					t.Setenv("LOG_SQL_DSN", "")
+					// InitDB normally creates the existing logs table first.
+					require.NoError(t, db.AutoMigrate(&model.Log{}))
+				}
+				for range 2 {
+					require.NoError(t, model.InitLogDB())
+				}
+				require.True(t, model.LOG_DB.Migrator().HasTable(&model.ErrorLog{}))
+				var version string
+				versionSQL := "SELECT version()"
+				if tc.kind == "sqlite" {
+					versionSQL = "SELECT sqlite_version()"
+				}
+				require.NoError(t, model.LOG_DB.Raw(versionSQL).Scan(&version).Error)
+				t.Logf("verified fresh and upgrade migrations: %s %s (separate=%v)", tc.kind, version, separate)
+
+				require.NoError(t, model.LOG_DB.Migrator().DropTable(&model.ErrorLog{}))
+				now := time.Now().Unix()
+				seedExportLogs(t, mainDB, model.LOG_DB, now)
+				for range 2 {
+					require.NoError(t, model.InitLogDB())
+				}
+				query := fmt.Sprintf("start_timestamp=%d&end_timestamp=%d", now-2*24*3600, now+3600)
+				legacy := callLogHandler(t, ExportUserLogs, 1, common.RoleCommonUser, query)
+				assert.Equal(t, []any{"a-2", "a-1"}, exportedRequestIds(legacy), "legacy errors remain accessible in usage logs")
+				for _, row := range []model.ErrorLog{
+					{UserId: 1, Username: "alice", CreatedAt: now - 40, Type: model.LogTypeError, ModelName: "gpt-a", ChannelId: 9, TokenId: 11, RequestId: "error-a", Group: "default", Other: `{"admin_info":{"use_channel":["9"]}}`},
+					{UserId: 2, Username: "bob", CreatedAt: now - 30, Type: model.LogTypeError, ModelName: "gpt-b", ChannelId: 9, TokenId: 22, RequestId: "error-b"},
+					{UserId: 1, CreatedAt: now - 400*24*3600, Type: model.LogTypeError, RequestId: "error-old"},
+				} {
+					require.NoError(t, model.LOG_DB.Create(&row).Error)
+				}
+				for range 2 {
+					require.NoError(t, model.InitLogDB())
+				}
+				if tc.kind != "clickhouse" {
+					assert.True(t, model.LOG_DB.Migrator().HasIndex(&model.Log{}, "idx_created_at_id"))
+					assert.True(t, model.LOG_DB.Migrator().HasIndex(&model.ErrorLog{}, "idx_errlog_created_at_id"))
+				}
+				listed := callLogHandler(t, GetUserErrorLogs, 1, common.RoleCommonUser, query)[0]
+				require.Equal(t, true, listed["success"])
+				assert.EqualValues(t, 1, listed["data"].(map[string]any)["total"])
+				own := callLogHandler(t, ExportUserErrorLogs, 1, common.RoleCommonUser, query)
+				require.Len(t, own, 2)
+				assert.Equal(t, []any{"error-a"}, exportedRequestIds(own))
+				assert.Empty(t, own[0]["channel_name"])
+				assert.NotContains(t, own[0]["other"], "admin_info")
+				all := callLogHandler(t, ExportAllErrorLogs, 3, common.RoleAdminUser, query+"&channel=9")
+				require.Len(t, all, 3)
+				assert.Equal(t, []any{"error-b", "error-a"}, exportedRequestIds(all))
+				assert.Equal(t, "primary", all[1]["channel_name"])
+				assert.Contains(t, all[1]["other"], "admin_info")
+				filtered := callLogHandler(t, GetAllErrorLogs, 3, common.RoleAdminUser, query+"&group=default&model_name=gpt-a")[0]
+				require.Equal(t, true, filtered["success"])
+				assert.EqualValues(t, 1, filtered["data"].(map[string]any)["total"])
+				tokenLogs, err := model.GetLogByTokenId(11)
+				require.NoError(t, err)
+				require.Len(t, tokenLogs, 1)
+				assert.Equal(t, "error-a", tokenLogs[0].RequestId)
+				assert.NotContains(t, tokenLogs[0].Other, "admin_info")
+				count, err := model.CountOldLog(context.Background(), now-365*24*3600)
+				require.NoError(t, err)
+				assert.EqualValues(t, 2, count)
+				deleted, err := model.DeleteOldLogBatch(context.Background(), now-365*24*3600, 100)
+				require.NoError(t, err)
+				assert.EqualValues(t, 2, deleted)
+				count, err = model.CountOldLog(context.Background(), now-365*24*3600)
+				require.NoError(t, err)
+				assert.Zero(t, count)
+				retained := callLogHandler(t, ExportUserLogs, 1, common.RoleCommonUser, query)
+				assert.Equal(t, exportedRequestIds(legacy), exportedRequestIds(retained), "separate error writes and cleanup preserve usage logs")
+			})
+		}
+	}
+}
+
 func TestLogExportRules(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, _ := newAuditTestDatabase(t, "sqlite", "")
@@ -173,6 +295,7 @@ func TestLogExportRules(t *testing.T) {
 		assert.Equal(t, false, callLogHandler(t, GetUserLogs, 1, common.RoleCommonUser, tooLong)[0]["success"])
 		assert.Equal(t, false, callLogHandler(t, GetLogsSelfStat, 1, common.RoleCommonUser, tooLong)[0]["success"])
 		assert.Equal(t, true, callLogHandler(t, GetUserLogs, 3, common.RoleAdminUser, tooLong)[0]["success"], "administrators search their own logs without a limit")
+		assert.Equal(t, true, callLogHandler(t, GetAllLogs, 3, common.RoleAdminUser, tooLong)[0]["success"])
 
 		// The dashboard follows the same range instead of its old one-month limit.
 		fortyDays := fmt.Sprintf("start_timestamp=%d&end_timestamp=%d", now-40*24*3600, now)
@@ -181,7 +304,7 @@ func TestLogExportRules(t *testing.T) {
 			assert.Equal(t, true, callLogHandler(t, handler, 1, common.RoleCommonUser, fortyDays)[0]["success"])
 		}
 
-		// Without a start, a user's search reaches back the whole range.
+		// Without a start, a search covers the hour before and after now.
 		listed := callLogHandler(t, GetUserLogs, 1, common.RoleCommonUser, "")[0]
 		assert.Equal(t, true, listed["success"])
 		assert.EqualValues(t, 2, listed["data"].(map[string]any)["total"])

@@ -22,6 +22,8 @@ For commercial licensing, please contact support@quantumnous.com
 import {
   getAllLogs,
   getUserLogs,
+  getAllErrorLogs,
+  getUserErrorLogs,
   getAllMidjourneyLogs,
   getUserMidjourneyLogs,
   getAllTaskLogs,
@@ -86,6 +88,17 @@ export function getDefaultTimeRange(): { start: Date; end: Date } {
   return { start, end }
 }
 
+/** Default usage-log search: one hour before and one hour after now. */
+export const LOG_QUERY_WINDOW_MS = 2 * 60 * 60 * 1000
+
+export function getLogQueryTimeRange(): { start: Date; end: Date } {
+  const now = Date.now()
+  return {
+    start: new Date(now - LOG_QUERY_WINDOW_MS / 2),
+    end: new Date(now + LOG_QUERY_WINDOW_MS / 2),
+  }
+}
+
 /**
  * Convert milliseconds timestamp to seconds for API
  */
@@ -99,10 +112,11 @@ function timestampToSeconds(ms: number): number {
  */
 function buildTimeRangeParams(
   searchParams: Record<string, unknown>,
-  useMilliseconds: boolean
+  useMilliseconds: boolean,
+  defaultTimeRangeFn: () => { start: Date; end: Date } = getDefaultTimeRange
 ): { start_timestamp?: number; end_timestamp?: number } {
   const hasTimeParams = searchParams.startTime ?? searchParams.endTime
-  const defaultTimeRange = !hasTimeParams ? getDefaultTimeRange() : null
+  const defaultTimeRange = !hasTimeParams ? defaultTimeRangeFn() : null
 
   const convertTimestamp = (timestamp: number) =>
     useMilliseconds ? timestamp : timestampToSeconds(timestamp)
@@ -199,7 +213,7 @@ export function buildApiParams(config: {
     ...(searchParams.upstreamRequestId
       ? { upstream_request_id: String(searchParams.upstreamRequestId) }
       : {}),
-    ...buildTimeRangeParams(searchParams, false),
+    ...buildTimeRangeParams(searchParams, false, getLogQueryTimeRange),
   }
 
   // Override with column filters if present
@@ -246,7 +260,7 @@ export async function fetchLogsByCategory(
   const { logCategory, isAdmin, page, pageSize, searchParams, columnFilters } =
     config
 
-  if (logCategory === 'common') {
+  if (logCategory === 'common' || logCategory === 'error') {
     const params = buildApiParams({
       page,
       pageSize,
@@ -254,6 +268,12 @@ export async function fetchLogsByCategory(
       columnFilters,
       isAdmin,
     })
+    if (logCategory === 'error') {
+      delete params.type
+      return isAdmin
+        ? await getAllErrorLogs(params)
+        : await getUserErrorLogs(params)
+    }
     return isAdmin ? await getAllLogs(params) : await getUserLogs(params)
   }
 

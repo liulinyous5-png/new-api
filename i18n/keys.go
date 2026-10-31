@@ -115,3 +115,19 @@ const (
 	MsgChannelUpstreamUpdateFailedChannels  = "channel.upstream_update_failed_channels"
 	MsgChannelUpstreamUpdateMoreOmitted     = "channel.upstream_update_more_omitted"
 )
+
+// Quality audit notifications sent to administrators.
+const (
+	MsgQualityChannelLine       = "quality.channel_line"
+	MsgQualityProbeFailed       = "quality.probe_failed"
+	MsgQualityProbeAlert        = "quality.probe_alert"
+	MsgQualitySummary           = "quality.summary"
+	MsgQualityChannelDetails    = "quality.channel_details"
+	MsgQualityProbeDetails      = "quality.probe_details"
+	MsgQualityUpstreamModel     = "quality.upstream_model"
+	MsgQualityStatusMismatch    = "quality.status_mismatch"
+	MsgQualityAssertionsFailed  = "quality.assertions_failed"
+	MsgQualityFailureReason     = "quality.failure_reason"
+	MsgQualityOmittedAssertions = "quality.omitted_assertions"
+	MsgQualityOmittedProbes     = "quality.omitted_probes"
+)

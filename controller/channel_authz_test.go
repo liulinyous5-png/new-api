@@ -45,6 +45,32 @@ func TestChannelHasSensitiveChanges(t *testing.T) {
 		assert.True(t, channelHasSensitiveChanges(&updated, origin, map[string]any{"key": updated.Key}))
 	})
 
+	t.Run("quality schedule requires sensitive write only when changed", func(t *testing.T) {
+		original := *origin
+		original.QualityAutoEnabled = true
+		original.QualitySuiteId = 12
+		for _, tc := range []struct {
+			name    string
+			enabled bool
+			suiteID int
+			fields  map[string]any
+			want    bool
+		}{
+			{"unchanged", true, 12, map[string]any{"quality_auto_enabled": true, "quality_suite_id": 12}, false},
+			{"disable", false, 12, map[string]any{"quality_auto_enabled": false}, true},
+			{"replace suite", true, 13, map[string]any{"quality_suite_id": 13}, true},
+			{"clear suite", false, 0, map[string]any{"quality_suite_id": 0}, true},
+			{"omitted", false, 0, map[string]any{"name": "renamed"}, false},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				updated := PatchChannel{Channel: original}
+				updated.QualityAutoEnabled = tc.enabled
+				updated.QualitySuiteId = tc.suiteID
+				assert.Equal(t, tc.want, channelHasSensitiveChanges(&updated, &original, tc.fields))
+			})
+		}
+	})
+
 	t.Run("base url change", func(t *testing.T) {
 		updated := PatchChannel{Channel: *origin}
 		newBaseURL := "https://leak.example.com"

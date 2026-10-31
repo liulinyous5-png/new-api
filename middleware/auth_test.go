@@ -321,11 +321,16 @@ func TestUserAuthAppliesAccessTokenRouteRules(t *testing.T) {
 	profile, _ := createMiddlewareScopedToken(t, admin.Id, 0, "profile:read")
 	channel, _ := createMiddlewareScopedToken(t, admin.Id, time.Now().Unix()+3600, "channel:read")
 	expired, _ := createMiddlewareScopedToken(t, admin.Id, time.Now().Unix()-1, "profile:read")
+	rootLegacy := "middleware-root-legacy-token"
+	root := createMiddlewarePATUser(t, "route-rule-root", rootLegacy)
+	require.NoError(t, model.DB.Model(root).Update("role", common.RoleRootUser).Error)
+	rootToken, _ := createMiddlewareScopedToken(t, root.Id, 0, "ops:read")
 
 	ok := func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"id": c.GetInt("id")}) }
 	router := gin.New()
 	router.GET("/api/user/self", UserAuth(), ok)
 	router.GET("/api/user/access_tokens", UserAuth(), ok)
+	router.GET("/api/monitor/quality_webhook/config", RootAuth(), ok)
 	router.GET("/api/undeclared", UserAuth(), ok)
 	router.GET("/api/channel/", AdminAuth(), RequirePermission(authz.ChannelRead), ok)
 	router.GET("/api/pricing", TryUserAuth(), ok)
@@ -338,6 +343,8 @@ func TestUserAuthAppliesAccessTokenRouteRules(t *testing.T) {
 		{name: "missing scope", path: "/api/user/self", token: channel, status: http.StatusForbidden, code: "ACCESS_TOKEN_SCOPE_DENIED", reason: "scope_denied"},
 		{name: "undeclared route", path: "/api/undeclared", token: profile, status: http.StatusForbidden, code: "ACCESS_TOKEN_ROUTE_UNDECLARED", reason: "route_undeclared"},
 		{name: "session route", path: "/api/user/access_tokens", token: profile, status: http.StatusForbidden, code: "AUTH_SESSION_REQUIRED", reason: "session_required"},
+		{name: "quality webhook requires a session", path: "/api/monitor/quality_webhook/config", token: rootToken, status: http.StatusForbidden, code: "AUTH_SESSION_REQUIRED", reason: "session_required"},
+		{name: "quality webhook rejects legacy tokens", path: "/api/monitor/quality_webhook/config", token: rootLegacy, status: http.StatusForbidden, code: "AUTH_SESSION_REQUIRED", reason: "session_required"},
 		{name: "permission route with its scope", path: "/api/channel/", token: channel, status: http.StatusOK},
 		{name: "permission route without its scope", path: "/api/channel/", token: profile, status: http.StatusForbidden, code: "ACCESS_TOKEN_SCOPE_DENIED", reason: "scope_denied"},
 		{name: "expired token", path: "/api/user/self", token: expired, status: http.StatusUnauthorized, code: "ACCESS_TOKEN_EXPIRED", reason: "expired"},

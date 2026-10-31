@@ -257,35 +257,35 @@ func FormatQualityWebhookNotification(alerts []QualityWebhookAlert, language str
 	}
 	values := make([]any, 0, len(alerts))
 	var content strings.Builder
-	content.WriteString(i18n.Translate(language, "quality.summary", map[string]any{"Count": len(alerts)}))
+	content.WriteString(i18n.Translate(language, i18n.MsgQualitySummary, map[string]any{"Count": len(alerts)}))
 	for _, alert := range alerts {
-		channelDetails := i18n.Translate(language, "quality.channel_details", map[string]any{"ChannelID": alert.ChannelID, "ChannelName": alert.ChannelName, "SuiteID": alert.SuiteID, "SuiteName": alert.SuiteName, "RunID": alert.SuiteRunID})
+		channelDetails := i18n.Translate(language, i18n.MsgQualityChannelDetails, map[string]any{"ChannelID": alert.ChannelID, "ChannelName": alert.ChannelName, "SuiteID": alert.SuiteID, "SuiteName": alert.SuiteName, "RunID": alert.SuiteRunID})
 		var details strings.Builder
 		for _, failure := range alert.Failures {
 			details.WriteString("\n\n")
-			details.WriteString(i18n.Translate(language, "quality.probe_details", map[string]any{"ProbeID": failure.ProbeID, "ProbeName": failure.ProbeName, "Model": failure.Model, "RunID": failure.RunID}))
+			details.WriteString(i18n.Translate(language, i18n.MsgQualityProbeDetails, map[string]any{"ProbeID": failure.ProbeID, "ProbeName": failure.ProbeName, "Model": failure.Model, "RunID": failure.RunID}))
 			if failure.UpstreamModel != "" && failure.UpstreamModel != failure.Model {
-				details.WriteString("\n" + i18n.Translate(language, "quality.upstream_model", map[string]any{"Model": failure.UpstreamModel}))
+				details.WriteString("\n" + i18n.Translate(language, i18n.MsgQualityUpstreamModel, map[string]any{"Model": failure.UpstreamModel}))
 			}
-			reason := i18n.Translate(language, "quality.probe_failed")
+			reason := i18n.Translate(language, i18n.MsgQualityProbeFailed)
 			if failure.ActualStatus != 0 {
-				reason = i18n.Translate(language, "quality.status_mismatch", map[string]any{"Actual": failure.ActualStatus, "Expected": fmt.Sprint(failure.ExpectedStatuses)})
+				reason = i18n.Translate(language, i18n.MsgQualityStatusMismatch, map[string]any{"Actual": failure.ActualStatus, "Expected": fmt.Sprint(failure.ExpectedStatuses)})
 			} else if len(failure.Assertions) > 0 {
-				reason = i18n.Translate(language, "quality.assertions_failed", map[string]any{"Assertions": strings.Join(failure.Assertions, "; ")})
+				reason = i18n.Translate(language, i18n.MsgQualityAssertionsFailed, map[string]any{"Assertions": strings.Join(failure.Assertions, "; ")})
 			}
-			details.WriteString("\n" + i18n.Translate(language, "quality.failure_reason", map[string]any{"Reason": reason}))
+			details.WriteString("\n" + i18n.Translate(language, i18n.MsgQualityFailureReason, map[string]any{"Reason": reason}))
 			if failure.OmittedAssertions > 0 {
-				details.WriteString("\n" + i18n.Translate(language, "quality.omitted_assertions", map[string]any{"Count": failure.OmittedAssertions}))
+				details.WriteString("\n" + i18n.Translate(language, i18n.MsgQualityOmittedAssertions, map[string]any{"Count": failure.OmittedAssertions}))
 			}
 		}
 		if alert.OmittedFailures > 0 {
-			details.WriteString("\n" + i18n.Translate(language, "quality.omitted_probes", map[string]any{"Count": alert.OmittedFailures}))
+			details.WriteString("\n" + i18n.Translate(language, i18n.MsgQualityOmittedProbes, map[string]any{"Count": alert.OmittedFailures}))
 		}
 		values = append(values, formattedQualityWebhookAlert{QualityWebhookAlert: alert, heading: channelDetails, details: details.String()})
 		content.WriteString("\n\n" + channelDetails + details.String())
 	}
 	// Preserve the existing event type for receivers that filter notifications.
-	return dto.NewNotify("quality_assertion_failed", i18n.Translate(language, "quality.probe_alert"), content.String(), values)
+	return dto.NewNotify("quality_assertion_failed", i18n.Translate(language, i18n.MsgQualityProbeAlert), content.String(), values)
 }
 
 // BuildQualityWebhookPayload applies the destination's signing protocol.

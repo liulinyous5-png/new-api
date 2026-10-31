@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import {
   Activity,
   Box,
+  CircleAlert,
   ClipboardList,
   CreditCard,
   FileText,
@@ -98,6 +99,11 @@ export function useSidebarData(): SidebarData {
             title: t('Audit Logs'),
             url: '/usage-logs/audit',
             icon: ClipboardList,
+          },
+          {
+            title: t('Error Logs'),
+            url: '/usage-logs/error',
+            icon: CircleAlert,
           },
           {
             title: t('Task Logs'),

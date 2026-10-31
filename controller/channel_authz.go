@@ -36,6 +36,14 @@ func channelHasSensitiveChanges(channel *PatchChannel, origin *model.Channel, re
 	if _, ok := requestData["key_mode"]; ok && channel.KeyMode != nil {
 		return true
 	}
+	// Scheduling probes consumes upstream credentials and quota. Preserve the
+	// sensitive-write gate, while allowing an unchanged schedule to be resent.
+	if _, ok := requestData["quality_auto_enabled"]; ok && channel.QualityAutoEnabled != origin.QualityAutoEnabled {
+		return true
+	}
+	if _, ok := requestData["quality_suite_id"]; ok && channel.QualitySuiteId != origin.QualitySuiteId {
+		return true
+	}
 	// Fail closed: any field present in the request that is neither a known
 	// sensitive field (gated above) nor an explicitly classified non-sensitive
 	// field must be treated as sensitive. This keeps a newly added channel field
@@ -64,17 +72,19 @@ func channelHasSensitiveChanges(channel *PatchChannel, origin *model.Channel, re
 // channelHasSensitiveChanges with a precise old-vs-new comparison; this set is
 // used to exclude them from the fail-closed scan for unknown fields.
 var channelSensitiveFields = map[string]struct{}{
-	"account_credentials": {},
-	"type":                {},
-	"key":                 {},
-	"base_url":            {},
-	"openai_organization": {},
-	"header_override":     {},
-	"param_override":      {},
-	"setting":             {},
-	"other":               {},
-	"settings":            {},
-	"key_mode":            {},
+	"account_credentials":  {},
+	"type":                 {},
+	"key":                  {},
+	"base_url":             {},
+	"openai_organization":  {},
+	"header_override":      {},
+	"param_override":       {},
+	"setting":              {},
+	"other":                {},
+	"settings":             {},
+	"key_mode":             {},
+	"quality_auto_enabled": {},
+	"quality_suite_id":     {},
 }
 
 // channelOperationalFields lists fields managed by operation endpoints instead

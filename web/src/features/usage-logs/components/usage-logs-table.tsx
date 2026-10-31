@@ -86,9 +86,10 @@ interface UsageLogsTableProps {
 
 export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   const { t } = useTranslation()
+  const usesCommonLayout = logCategory === 'common' || logCategory === 'error'
   const getColumnClassName = useCallback(
-    () => (logCategory === 'common' ? 'py-2' : 'py-3.5'),
-    [logCategory]
+    () => (usesCommonLayout ? 'py-2' : 'py-3.5'),
+    [usesCommonLayout]
   )
   const {
     isAdminView: isAdmin,
@@ -225,7 +226,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
     ensurePageInRange,
   })
 
-  const isCommon = logCategory === 'common'
+  const isCommon = usesCommonLayout
 
   return (
     <DataTablePage

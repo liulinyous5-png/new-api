@@ -251,7 +251,11 @@ export function UsageLogsMobileList<TData>({
     t('No usage logs available. Logs will appear here once API calls are made.')
 
   if (isLoading) {
-    return <UsageLogsMobileSkeleton separate={logCategory === 'common'} />
+    return (
+      <UsageLogsMobileSkeleton
+        separate={logCategory === 'common' || logCategory === 'error'}
+      />
+    )
   }
 
   const rows = table.getRowModel().rows
@@ -275,7 +279,7 @@ export function UsageLogsMobileList<TData>({
   return (
     <div
       className={cn(
-        logCategory === 'common'
+        logCategory === 'common' || logCategory === 'error'
           ? 'min-w-0 space-y-3'
           : 'border-border/50 bg-card overflow-hidden rounded-lg border'
       )}
@@ -294,13 +298,13 @@ export function UsageLogsMobileList<TData>({
           <div
             key={row.id}
             className={cn(
-              logCategory === 'common'
+              logCategory === 'common' || logCategory === 'error'
                 ? 'border-border/60 bg-card min-w-0 rounded-xl border p-3.5'
                 : 'border-border/40 border-b border-l-2 border-l-transparent p-3 transition-colors last:border-b-0',
               tintClass
             )}
           >
-            {logCategory === 'common' && (
+            {(logCategory === 'common' || logCategory === 'error') && (
               <CommonLogMobileCard
                 log={row.original as UsageLog}
                 cells={cells}

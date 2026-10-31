@@ -179,6 +179,8 @@ var accessTokenRouteRules = map[string]accessTokenRouteRule{
 	"PUT /api/monitor/ttft/config":            accessTokenSessionRule,
 	"GET /api/monitor/channel_disable/config": accessTokenSessionRule,
 	"PUT /api/monitor/channel_disable/config": accessTokenSessionRule,
+	"GET /api/monitor/quality_webhook/config": accessTokenSessionRule,
+	"PUT /api/monitor/quality_webhook/config": accessTokenSessionRule,
 
 	// router/api-router.go: /api/performance, /api/system-task, /api/system-info
 	"GET /api/performance/stats":                   accessTokenScopeRule("ops:read"),
@@ -250,6 +252,10 @@ var accessTokenRouteRules = map[string]accessTokenRouteRule{
 	"GET /api/log/self/search":                  accessTokenScopeRule("usage:read"),
 	"GET /api/log/export":                       accessTokenScopeRule("log:read"),
 	"GET /api/log/self/export":                  accessTokenScopeRule("usage:read"),
+	"GET /api/log/error":                        accessTokenScopeRule("log:read"),
+	"GET /api/log/error/self":                   accessTokenScopeRule("usage:read"),
+	"GET /api/log/error/export":                 accessTokenScopeRule("log:read"),
+	"GET /api/log/error/self/export":            accessTokenScopeRule("usage:read"),
 	"GET /api/data/":                            accessTokenScopeRule("log:read"),
 	"GET /api/data/users":                       accessTokenScopeRule("log:read"),
 	"GET /api/data/self":                        accessTokenScopeRule("usage:read"),

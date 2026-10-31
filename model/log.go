@@ -1,7 +1,9 @@
 package model
 
 import (
+	"cmp"
 	"context"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -80,6 +82,97 @@ type Log struct {
 	Other             string `json:"other"`
 }
 
+// ErrorLog stores relay failures in their own table. Columns match Log.
+// Named indexes use an errlog prefix because SQLite and PostgreSQL index
+// names are unique across the schema, and logs already owns those names.
+type ErrorLog struct {
+	Id                int    `json:"id" gorm:"index:idx_errlog_created_at_id,priority:2;index:idx_errlog_user_id_id,priority:2"`
+	UserId            int    `json:"user_id" gorm:"index;index:idx_errlog_user_id_id,priority:1"`
+	CreatedAt         int64  `json:"created_at" gorm:"bigint;index:idx_errlog_created_at_id,priority:1;index:idx_errlog_created_at_type"`
+	Type              int    `json:"type" gorm:"index:idx_errlog_created_at_type"`
+	Content           string `json:"content"`
+	Username          string `json:"username" gorm:"index;index:idx_errlog_username_model_name,priority:2;default:''"`
+	TokenName         string `json:"token_name" gorm:"index;default:''"`
+	ModelName         string `json:"model_name" gorm:"index;index:idx_errlog_username_model_name,priority:1;default:''"`
+	Quota             int    `json:"quota" gorm:"default:0"`
+	PromptTokens      int    `json:"prompt_tokens" gorm:"default:0"`
+	CompletionTokens  int    `json:"completion_tokens" gorm:"default:0"`
+	UseTime           int    `json:"use_time" gorm:"default:0"`
+	IsStream          bool   `json:"is_stream"`
+	ChannelId         int    `json:"channel" gorm:"index"`
+	ChannelName       string `json:"channel_name" gorm:"->"`
+	TokenId           int    `json:"token_id" gorm:"default:0;index"`
+	Group             string `json:"group" gorm:"index"`
+	Ip                string `json:"ip" gorm:"index;default:''"`
+	RequestId         string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_errlog_request_id;default:''"`
+	UpstreamRequestId string `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_errlog_upstream_request_id;default:''"`
+	Other             string `json:"other"`
+}
+
+func (ErrorLog) TableName() string { return "error_logs" }
+
+func newErrorLog(log *Log) ErrorLog {
+	return ErrorLog{
+		UserId:            log.UserId,
+		CreatedAt:         log.CreatedAt,
+		Type:              log.Type,
+		Content:           log.Content,
+		Username:          log.Username,
+		TokenName:         log.TokenName,
+		ModelName:         log.ModelName,
+		Quota:             log.Quota,
+		PromptTokens:      log.PromptTokens,
+		CompletionTokens:  log.CompletionTokens,
+		UseTime:           log.UseTime,
+		IsStream:          log.IsStream,
+		ChannelId:         log.ChannelId,
+		TokenId:           log.TokenId,
+		Group:             log.Group,
+		Ip:                log.Ip,
+		RequestId:         log.RequestId,
+		UpstreamRequestId: log.UpstreamRequestId,
+		Other:             log.Other,
+	}
+}
+
+func (row ErrorLog) toLog() *Log {
+	return &Log{
+		Id:                row.Id,
+		UserId:            row.UserId,
+		CreatedAt:         row.CreatedAt,
+		Type:              row.Type,
+		Content:           row.Content,
+		Username:          row.Username,
+		TokenName:         row.TokenName,
+		ModelName:         row.ModelName,
+		Quota:             row.Quota,
+		PromptTokens:      row.PromptTokens,
+		CompletionTokens:  row.CompletionTokens,
+		UseTime:           row.UseTime,
+		IsStream:          row.IsStream,
+		ChannelId:         row.ChannelId,
+		ChannelName:       row.ChannelName,
+		TokenId:           row.TokenId,
+		Group:             row.Group,
+		Ip:                row.Ip,
+		RequestId:         row.RequestId,
+		UpstreamRequestId: row.UpstreamRequestId,
+		Other:             row.Other,
+	}
+}
+
+func errorLogsToLogs(rows []ErrorLog) []*Log {
+	logs := make([]*Log, len(rows))
+	for i := range rows {
+		logs[i] = rows[i].toLog()
+	}
+	return logs
+}
+
+func errorLogTableReady() bool {
+	return LOG_DB != nil && LOG_DB.Migrator().HasTable(&ErrorLog{})
+}
+
 // don't use iota, avoid change log type value
 const (
 	LogTypeUnknown = 0
@@ -142,6 +235,12 @@ func createLog(log *Log) error {
 	return LOG_DB.Create(log).Error
 }
 
+func createErrorLog(log *Log) error {
+	ensureLogRequestId(log)
+	row := newErrorLog(log)
+	return LOG_DB.Create(&row).Error
+}
+
 func clickHouseLogOrder(prefix string) string {
 	return prefix + "created_at desc, " + prefix + "request_id desc"
 }
@@ -176,14 +275,55 @@ func FormatRootLogs(logs []*Log) {
 	}
 }
 
-func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
+func recentLogsByToken(tokenId int) ([]*Log, error) {
 	order := "id desc"
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		order = clickHouseLogOrder("")
 	}
-	err = LOG_DB.Model(&Log{}).Where("token_id = ?", tokenId).Order(order).Limit(common.MaxRecentItems).Find(&logs).Error
-	formatUserLogs(logs, 0)
+	var logs []*Log
+	err := LOG_DB.Model(&Log{}).Where("token_id = ?", tokenId).Order(order).Limit(common.MaxRecentItems).Find(&logs).Error
 	return logs, err
+}
+
+func recentErrorLogsByToken(tokenId int) ([]*Log, error) {
+	if !errorLogTableReady() {
+		return nil, nil
+	}
+	order := "id desc"
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		order = clickHouseLogOrder("")
+	}
+	var rows []ErrorLog
+	err := LOG_DB.Model(&ErrorLog{}).Where("token_id = ?", tokenId).Order(order).Limit(common.MaxRecentItems).Find(&rows).Error
+	return errorLogsToLogs(rows), err
+}
+
+func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
+	logs, err = recentLogsByToken(tokenId)
+	if err != nil {
+		return nil, err
+	}
+	errorLogs, err := recentErrorLogsByToken(tokenId)
+	if err != nil {
+		return nil, err
+	}
+	if len(errorLogs) > 0 {
+		logs = append(logs, errorLogs...)
+		slices.SortFunc(logs, func(a, b *Log) int {
+			if a.CreatedAt != b.CreatedAt {
+				return cmp.Compare(b.CreatedAt, a.CreatedAt)
+			}
+			if a.RequestId != b.RequestId {
+				return cmp.Compare(b.RequestId, a.RequestId)
+			}
+			return cmp.Compare(b.Id, a.Id)
+		})
+		if len(logs) > common.MaxRecentItems {
+			logs = logs[:common.MaxRecentItems]
+		}
+	}
+	formatUserLogs(logs, 0)
+	return logs, nil
 }
 
 func RecordLog(userId int, logType int, content *common.Message) {
@@ -357,7 +497,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 		UpstreamRequestId: upstreamRequestId,
 		Other:             otherStr,
 	}
-	err := createLog(log)
+	err := createErrorLog(log)
 	if err != nil {
 		logger.LogError(c, common.LogText("failed to record log: %s", err.Error()))
 	}
@@ -543,36 +683,41 @@ type LogFilter struct {
 }
 
 func (f LogFilter) apply(tx *gorm.DB) (*gorm.DB, error) {
+	return f.applyOn(tx, "logs")
+}
+
+func (f LogFilter) applyOn(tx *gorm.DB, table string) (*gorm.DB, error) {
+	column := func(name string) string { return table + "." + name }
 	var err error
 	if f.Type != LogTypeUnknown {
-		tx = tx.Where("logs.type = ?", f.Type)
+		tx = tx.Where(column("type")+" = ?", f.Type)
 	}
-	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", f.ModelName); err != nil {
+	if tx, err = applyExplicitLogTextFilter(tx, column("model_name"), f.ModelName); err != nil {
 		return nil, err
 	}
-	if tx, err = applyExplicitLogTextFilter(tx, "logs.username", f.Username); err != nil {
+	if tx, err = applyExplicitLogTextFilter(tx, column("username"), f.Username); err != nil {
 		return nil, err
 	}
 	if f.TokenName != "" {
-		tx = tx.Where("logs.token_name = ?", f.TokenName)
+		tx = tx.Where(column("token_name")+" = ?", f.TokenName)
 	}
 	if f.RequestId != "" {
-		tx = tx.Where("logs.request_id = ?", f.RequestId)
+		tx = tx.Where(column("request_id")+" = ?", f.RequestId)
 	}
 	if f.UpstreamRequestId != "" {
-		tx = tx.Where("logs.upstream_request_id = ?", f.UpstreamRequestId)
+		tx = tx.Where(column("upstream_request_id")+" = ?", f.UpstreamRequestId)
 	}
 	if f.StartTimestamp != 0 {
-		tx = tx.Where("logs.created_at >= ?", f.StartTimestamp)
+		tx = tx.Where(column("created_at")+" >= ?", f.StartTimestamp)
 	}
 	if f.EndTimestamp != 0 {
-		tx = tx.Where("logs.created_at <= ?", f.EndTimestamp)
+		tx = tx.Where(column("created_at")+" <= ?", f.EndTimestamp)
 	}
 	if f.Channel != 0 {
-		tx = tx.Where("logs.channel_id = ?", f.Channel)
+		tx = tx.Where(column("channel_id")+" = ?", f.Channel)
 	}
 	if f.Group != "" {
-		tx = tx.Where("logs."+logGroupCol+" = ?", f.Group)
+		tx = tx.Where(column(logGroupCol)+" = ?", f.Group)
 	}
 	return tx, nil
 }
@@ -597,48 +742,51 @@ func GetAllLogs(filter LogFilter, startIdx int, num int) (logs []*Log, total int
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		assignDisplayLogIds(logs, startIdx)
 	}
+	if err = attachLogChannelNames(logs); err != nil {
+		return logs, total, err
+	}
 
+	return logs, total, err
+}
+
+func attachLogChannelNames(logs []*Log) error {
 	channelIds := types.NewSet[int]()
 	for _, log := range logs {
 		if log.ChannelId != 0 {
 			channelIds.Add(log.ChannelId)
 		}
 	}
-
-	if channelIds.Len() > 0 {
-		var channels []struct {
-			Id   int    `gorm:"column:id"`
-			Name string `gorm:"column:name"`
-		}
-		if common.MemoryCacheEnabled {
-			// Cache get channel
-			for _, channelId := range channelIds.Items() {
-				if cacheChannel, err := CacheGetChannel(channelId); err == nil {
-					channels = append(channels, struct {
-						Id   int    `gorm:"column:id"`
-						Name string `gorm:"column:name"`
-					}{
-						Id:   channelId,
-						Name: cacheChannel.Name,
-					})
-				}
-			}
-		} else {
-			// Bulk query channels from DB
-			if err = DB.Table("channels").Select("id, name").Where("id IN ?", channelIds.Items()).Find(&channels).Error; err != nil {
-				return logs, total, err
-			}
-		}
-		channelMap := make(map[int]string, len(channels))
-		for _, channel := range channels {
-			channelMap[channel.Id] = channel.Name
-		}
-		for i := range logs {
-			logs[i].ChannelName = channelMap[logs[i].ChannelId]
-		}
+	if channelIds.Len() == 0 {
+		return nil
 	}
 
-	return logs, total, err
+	var channels []struct {
+		Id   int    `gorm:"column:id"`
+		Name string `gorm:"column:name"`
+	}
+	if common.MemoryCacheEnabled {
+		for _, channelId := range channelIds.Items() {
+			if cacheChannel, err := CacheGetChannel(channelId); err == nil {
+				channels = append(channels, struct {
+					Id   int    `gorm:"column:id"`
+					Name string `gorm:"column:name"`
+				}{
+					Id:   channelId,
+					Name: cacheChannel.Name,
+				})
+			}
+		}
+	} else if err := DB.Table("channels").Select("id, name").Where("id IN ?", channelIds.Items()).Find(&channels).Error; err != nil {
+		return err
+	}
+	channelMap := make(map[int]string, len(channels))
+	for _, channel := range channels {
+		channelMap[channel.Id] = channel.Name
+	}
+	for i := range logs {
+		logs[i].ChannelName = channelMap[logs[i].ChannelId]
+	}
+	return nil
 }
 
 const logSearchCountLimit = 10000
@@ -665,6 +813,70 @@ func GetUserLogs(userId int, filter LogFilter, startIdx int, num int) (logs []*L
 
 	formatUserLogs(logs, startIdx)
 	return logs, total, err
+}
+
+func errorLogFilter(filter LogFilter) LogFilter {
+	filter.Type = LogTypeUnknown
+	return filter
+}
+
+func GetAllErrorLogs(filter LogFilter, startIdx int, num int) (logs []*Log, total int64, err error) {
+	if !errorLogTableReady() {
+		return nil, 0, nil
+	}
+	tx, err := errorLogFilter(filter).applyOn(LOG_DB, "error_logs")
+	if err != nil {
+		return nil, 0, err
+	}
+	err = tx.Model(&ErrorLog{}).Count(&total).Error
+	if err != nil {
+		return nil, 0, err
+	}
+	order := "error_logs.created_at desc, error_logs.id desc"
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		order = clickHouseLogOrder("error_logs.")
+	}
+	var rows []ErrorLog
+	err = tx.Model(&ErrorLog{}).Order(order).Limit(num).Offset(startIdx).Find(&rows).Error
+	if err != nil {
+		return nil, 0, err
+	}
+	logs = errorLogsToLogs(rows)
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		assignDisplayLogIds(logs, startIdx)
+	}
+	if err = attachLogChannelNames(logs); err != nil {
+		return logs, total, err
+	}
+	return logs, total, nil
+}
+
+func GetUserErrorLogs(userId int, filter LogFilter, startIdx int, num int) (logs []*Log, total int64, err error) {
+	if !errorLogTableReady() {
+		return nil, 0, nil
+	}
+	tx, err := errorLogFilter(filter).applyOn(LOG_DB.Where("error_logs.user_id = ?", userId), "error_logs")
+	if err != nil {
+		return nil, 0, err
+	}
+	err = tx.Model(&ErrorLog{}).Limit(logSearchCountLimit).Count(&total).Error
+	if err != nil {
+		common.SysError(common.LogText("failed to count user error logs: %s", err.Error()))
+		return nil, 0, common.NewMessage("Failed to query logs")
+	}
+	order := "error_logs.id desc"
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		order = clickHouseLogOrder("error_logs.")
+	}
+	var rows []ErrorLog
+	err = tx.Model(&ErrorLog{}).Order(order).Limit(num).Offset(startIdx).Find(&rows).Error
+	if err != nil {
+		common.SysError(common.LogText("failed to search user error logs: %s", err.Error()))
+		return nil, 0, common.NewMessage("Failed to query logs")
+	}
+	logs = errorLogsToLogs(rows)
+	formatUserLogs(logs, startIdx)
+	return logs, total, nil
 }
 
 // StreamAllLogs calls fn with each log matching filter, newest first, as an
@@ -713,6 +925,53 @@ func StreamUserLogs(ctx context.Context, userId int, filter LogFilter, fn func(*
 	})
 }
 
+func StreamAllErrorLogs(ctx context.Context, filter LogFilter, role int, fn func(*Log) error) error {
+	if !errorLogTableReady() {
+		return nil
+	}
+	tx, err := errorLogFilter(filter).applyOn(LOG_DB.WithContext(ctx), "error_logs")
+	if err != nil {
+		return err
+	}
+	visibility := logOtherVisibilityAdmin
+	if role >= common.RoleRootUser {
+		visibility = logOtherVisibilityRoot
+	}
+	channelNames := make(map[int]string)
+	return streamErrorLogs(tx, "error_logs.created_at desc, error_logs.id desc", func(log *Log) error {
+		if log.ChannelId != 0 {
+			name, ok := channelNames[log.ChannelId]
+			if !ok {
+				if channel, err := CacheGetChannel(log.ChannelId); err == nil {
+					name = channel.Name
+				}
+				channelNames[log.ChannelId] = name
+			}
+			log.ChannelName = name
+		}
+		log.Other = formatLogOtherJSON(log.Other, visibility)
+		return fn(log)
+	})
+}
+
+func StreamUserErrorLogs(ctx context.Context, userId int, filter LogFilter, fn func(*Log) error) error {
+	if !errorLogTableReady() {
+		return nil
+	}
+	tx, err := errorLogFilter(filter).applyOn(LOG_DB.WithContext(ctx).Where("error_logs.user_id = ?", userId), "error_logs")
+	if err != nil {
+		return err
+	}
+	count := 0
+	return streamErrorLogs(tx, "error_logs.id desc", func(log *Log) error {
+		count++
+		log.Id = count
+		log.ChannelName = ""
+		log.Other = formatLogOtherJSON(log.Other, logOtherVisibilityUser)
+		return fn(log)
+	})
+}
+
 func streamLogs(tx *gorm.DB, order string, fn func(*Log) error) error {
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		order = clickHouseLogOrder("logs.")
@@ -728,6 +987,27 @@ func streamLogs(tx *gorm.DB, order string, fn func(*Log) error) error {
 			return err
 		}
 		if err := fn(&log); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+func streamErrorLogs(tx *gorm.DB, order string, fn func(*Log) error) error {
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		order = clickHouseLogOrder("error_logs.")
+	}
+	rows, err := tx.Model(&ErrorLog{}).Order(order).Rows()
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var row ErrorLog
+		if err := LOG_DB.ScanRows(rows, &row); err != nil {
+			return err
+		}
+		if err := fn(row.toLog()); err != nil {
 			return err
 		}
 	}
@@ -823,12 +1103,22 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	return token
 }
 
-func CountOldLog(ctx context.Context, targetTimestamp int64) (int64, error) {
+func countOldRows(ctx context.Context, model any, targetTimestamp int64) (int64, error) {
 	var total int64
-	if err := LOG_DB.WithContext(ctx).Model(&Log{}).Where("created_at < ?", targetTimestamp).Count(&total).Error; err != nil {
+	err := LOG_DB.WithContext(ctx).Model(model).Where("created_at < ?", targetTimestamp).Count(&total).Error
+	return total, err
+}
+
+func CountOldLog(ctx context.Context, targetTimestamp int64) (int64, error) {
+	total, err := countOldRows(ctx, &Log{}, targetTimestamp)
+	if err != nil || !errorLogTableReady() {
+		return total, err
+	}
+	errorTotal, err := countOldRows(ctx, &ErrorLog{}, targetTimestamp)
+	if err != nil {
 		return 0, err
 	}
-	return total, nil
+	return total + errorTotal, nil
 }
 
 func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
@@ -844,25 +1134,50 @@ func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (i
 		// per-batch mutations would be pathologically slow. Remove all matching
 		// rows in a single synchronous mutation regardless of limit; the reported
 		// count lets the caller's progress loop complete in one pass.
-		total, err := CountOldLog(ctx, targetTimestamp)
+		total, err := countOldRows(ctx, &Log{}, targetTimestamp)
 		if err != nil {
 			return 0, err
 		}
-		if total == 0 {
+		errorTotal := int64(0)
+		if errorLogTableReady() {
+			errorTotal, err = countOldRows(ctx, &ErrorLog{}, targetTimestamp)
+			if err != nil {
+				return 0, err
+			}
+		}
+		if total == 0 && errorTotal == 0 {
 			return 0, nil
 		}
-		if err := LOG_DB.WithContext(ctx).Exec(
-			"ALTER TABLE logs DELETE WHERE created_at < ? SETTINGS mutations_sync = 1",
-			targetTimestamp,
-		).Error; err != nil {
-			return 0, err
+		if total > 0 {
+			if err := LOG_DB.WithContext(ctx).Exec(
+				"ALTER TABLE logs DELETE WHERE created_at < ? SETTINGS mutations_sync = 1",
+				targetTimestamp,
+			).Error; err != nil {
+				return 0, err
+			}
 		}
-		return total, nil
+		if errorTotal > 0 {
+			if err := LOG_DB.WithContext(ctx).Exec(
+				"ALTER TABLE error_logs DELETE WHERE created_at < ? SETTINGS mutations_sync = 1",
+				targetTimestamp,
+			).Error; err != nil {
+				return 0, err
+			}
+		}
+		return total + errorTotal, nil
 	}
 
 	result := LOG_DB.WithContext(ctx).Where("created_at < ?", targetTimestamp).Limit(limit).Delete(&Log{})
 	if nil != result.Error {
 		return 0, result.Error
 	}
-	return result.RowsAffected, nil
+	deleted := result.RowsAffected
+	if errorLogTableReady() {
+		errorResult := LOG_DB.WithContext(ctx).Where("created_at < ?", targetTimestamp).Limit(limit).Delete(&ErrorLog{})
+		if errorResult.Error != nil {
+			return 0, errorResult.Error
+		}
+		deleted += errorResult.RowsAffected
+	}
+	return deleted, nil
 }

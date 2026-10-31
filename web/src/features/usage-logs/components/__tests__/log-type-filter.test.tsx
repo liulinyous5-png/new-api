@@ -92,7 +92,7 @@ afterEach(() => {
 it('marks only retired log types as deprecated while keeping historical filters selectable', async () => {
   const router = await renderFilter()
   await userEvent.click(screen.getByRole('combobox', { name: 'Type' }))
-  for (const label of ['Manage', 'Login']) {
+  for (const label of ['Manage', 'Login', 'Error']) {
     expect(
       within(
         screen.getByRole('option', { name: new RegExp(`^${label}`) })
@@ -104,7 +104,6 @@ it('marks only retired log types as deprecated while keeping historical filters 
     'Top-up',
     'Consume',
     'System',
-    'Error',
     'Refund',
   ]) {
     expect(

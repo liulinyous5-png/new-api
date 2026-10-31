@@ -43,6 +43,7 @@ export function useColumnsByCategory(
 
   switch (logCategory) {
     case 'common':
+    case 'error':
       return commonColumns
     case 'drawing':
       return drawingColumns
