@@ -379,6 +379,7 @@ func migrateDB() error {
 		&UserAccessToken{},
 		&ChannelQualityProbe{},
 		&ChannelQualityRun{},
+		&ChannelQualityResponse{},
 		&ChannelQualitySuite{},
 		&ChannelQualitySuiteItem{},
 		&ChannelQualitySuiteRun{},

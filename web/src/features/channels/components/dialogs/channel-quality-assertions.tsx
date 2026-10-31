@@ -50,6 +50,7 @@ const modeLabel = {
 const operatorLabel = {
   eq: 'Equals',
   neq: 'Does not equal',
+  contains: 'Contains',
   notEmpty: 'Is not empty',
   gt: 'Greater than',
   gte: 'Greater than or equal',

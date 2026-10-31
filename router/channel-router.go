@@ -78,6 +78,7 @@ var channelPermissionRoutes = []permissionRoute{
 	{method: http.MethodDelete, path: "/quality/suites/:suiteId", permission: authz.ChannelWrite, handler: controller.DeleteChannelQualitySuite},
 	{method: http.MethodGet, path: "/:id/quality/suite-run", permission: authz.ChannelRead, handler: controller.GetChannelQualitySuiteRun},
 	{method: http.MethodGet, path: "/:id/quality/runs", permission: authz.ChannelRead, handler: controller.ListChannelQualityRuns},
+	{method: http.MethodGet, path: "/:id/quality/runs/:runId/response", permission: authz.ChannelRead, handler: controller.GetChannelQualityResponse},
 	{method: http.MethodGet, path: "/:id/quality", permission: authz.ChannelRead, handler: controller.GetChannelQualityRun},
 	{method: http.MethodPost, path: "/:id/quality", permission: authz.ChannelOperate, handler: controller.StartChannelQuality},
 	{method: http.MethodGet, path: "/update_balance", permission: authz.ChannelOperate, handler: controller.UpdateAllChannelsBalance},

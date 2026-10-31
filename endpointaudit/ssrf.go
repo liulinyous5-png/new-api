@@ -25,19 +25,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync/atomic"
 	"time"
 )
-
-var allowPrivateNetworks atomic.Bool
-
-// AllowPrivateNetworksForTest lets tests call a local HTTPS server.
-// Production keeps the default, which rejects loopback and private addresses.
-func AllowPrivateNetworksForTest(allow bool) func() {
-	previous := allowPrivateNetworks.Load()
-	allowPrivateNetworks.Store(allow)
-	return func() { allowPrivateNetworks.Store(previous) }
-}
 
 func NormalizeMessagesURL(ctx context.Context, raw string) (*url.URL, error) {
 	raw = strings.TrimSpace(raw)
@@ -55,15 +44,10 @@ func NormalizeMessagesURL(ctx context.Context, raw string) (*url.URL, error) {
 		return nil, errors.New("endpoint address is not allowed")
 	}
 	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
-	if blockedHostname(host) {
-		return nil, errors.New("endpoint address is not allowed")
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if blockedIP(ip) {
-			return nil, errors.New("endpoint address is not allowed")
+	if net.ParseIP(host) == nil {
+		if err := resolveAllowed(ctx, host); err != nil {
+			return nil, err
 		}
-	} else if err := resolveAllowed(ctx, host); err != nil {
-		return nil, err
 	}
 	path := strings.TrimSuffix(parsed.Path, "/")
 	switch {
@@ -80,49 +64,10 @@ func NormalizeMessagesURL(ctx context.Context, raw string) (*url.URL, error) {
 	return parsed, nil
 }
 
-func blockedHostname(host string) bool {
-	if allowPrivateNetworks.Load() {
-		return false
-	}
-	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
-		return true
-	}
-	switch host {
-	case "metadata.google.internal", "metadata.internal":
-		return true
-	}
-	return false
-}
-
-func blockedIP(ip net.IP) bool {
-	if allowPrivateNetworks.Load() {
-		return false
-	}
-	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() || ip.IsInterfaceLocalMulticast() {
-		return true
-	}
-	ip4 := ip.To4()
-	if ip4 == nil {
-		return false
-	}
-	if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
-		return true
-	}
-	if ip4[0] == 198 && (ip4[1] == 18 || ip4[1] == 19) {
-		return true
-	}
-	return false
-}
-
 func resolveAllowed(ctx context.Context, host string) error {
 	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 	if err != nil || len(ips) == 0 {
 		return errors.New("endpoint address could not be resolved")
-	}
-	for _, ip := range ips {
-		if blockedIP(ip.IP) {
-			return errors.New("endpoint address is not allowed")
-		}
 	}
 	return nil
 }
@@ -130,41 +75,8 @@ func resolveAllowed(ctx context.Context, host string) error {
 func NewSafeClient() *http.Client {
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	transport := &http.Transport{
-		Proxy: nil,
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, port, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, err
-			}
-			if ip := net.ParseIP(host); ip != nil {
-				if blockedIP(ip) {
-					return nil, errors.New("endpoint address is not allowed")
-				}
-				return dialer.DialContext(ctx, network, addr)
-			}
-			if err := resolveAllowed(ctx, host); err != nil {
-				return nil, err
-			}
-			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-			if err != nil || len(ips) == 0 {
-				return nil, errors.New("endpoint address could not be resolved")
-			}
-			var last error
-			for _, ip := range ips {
-				if blockedIP(ip.IP) {
-					return nil, errors.New("endpoint address is not allowed")
-				}
-				conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.IP.String(), port))
-				if dialErr == nil {
-					return conn, nil
-				}
-				last = dialErr
-			}
-			if last == nil {
-				last = errors.New("endpoint address is not allowed")
-			}
-			return nil, last
-		},
+		Proxy:               nil,
+		DialContext:         dialer.DialContext,
 		ForceAttemptHTTP2:   false,
 		TLSHandshakeTimeout: 10 * time.Second,
 		DisableKeepAlives:   true,

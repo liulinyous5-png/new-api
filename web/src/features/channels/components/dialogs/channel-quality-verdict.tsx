@@ -46,6 +46,7 @@ function qualityVerdictText(
 ): string {
   if (verdict === 'passed') return t('Passed')
   if (verdict === 'failed') return t('Failed')
+  if (verdict === 'unknown') return t('Unknown')
   if (verdict === 'error') return t('Error')
   if (verdict === 'unsupported') return t('Unsupported')
   if (verdict === 'running') return t('Running')
@@ -56,6 +57,7 @@ function qualityVerdictText(
 function qualityVerdictVariant(verdict: string): StatusBadgeProps['variant'] {
   if (verdict === 'passed') return 'success'
   if (verdict === 'failed') return 'danger'
+  if (verdict === 'unknown') return 'warning'
   if (verdict === 'error') return 'warning'
   return 'neutral'
 }

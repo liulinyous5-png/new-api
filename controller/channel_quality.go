@@ -31,7 +31,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const maxQualityResponseBytes = 1 << 20
+const maxQualityResponseBytes = model.MaxChannelQualityResponseBytes
 
 type channelQualityTaskPayload struct {
 	ChannelID int    `json:"channel_id"`
@@ -586,8 +586,8 @@ func executeChannelQualityTask(ctx context.Context, payload channelQualityTaskPa
 			run.Error = err.Error()
 			run.Verdict = model.ChannelQualityVerdictError
 		}
-		if saveErr := model.SaveChannelQualityRun(run); saveErr != nil {
-			return resultView(), saveErr
+		if saveErr := model.SaveChannelQualityResult(run, outcome.Response); saveErr != nil {
+			return failQualityRun(run, model.ChannelQualityVerdictError, "failed to save quality audit response"), saveErr
 		}
 	}
 	if err != nil {
@@ -627,6 +627,7 @@ type qualityAuditOutcome struct {
 	UsageJSON        string
 	Error            string
 	ProbeSnapshot    string
+	Response         *model.ChannelQualityResponse
 }
 
 func auditAnthropicChannel(ctx context.Context, channel *model.Channel, probe *model.ChannelQualityProbe, selectedModel string, keyIndex *int) (qualityAuditOutcome, error) {
@@ -737,6 +738,9 @@ func auditAnthropicChannel(ctx context.Context, channel *model.Channel, probe *m
 		}
 		status, respBody, err := awsAdaptor.ExecuteQuality(ginCtx, info, payload, headers)
 		if err != nil {
+			if status > 0 {
+				outcome.Response = captureQualityResponse(status, respBody, true)
+			}
 			var unsupported *aws.QualityUnsupportedError
 			if errors.As(err, &unsupported) {
 				outcome.Verdict = model.ChannelQualityVerdictUnsupported
@@ -754,6 +758,7 @@ func auditAnthropicChannel(ctx context.Context, channel *model.Channel, probe *m
 	defer resp.Body.Close()
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxQualityResponseBytes+1))
 	if err != nil {
+		outcome.Response = captureQualityResponse(resp.StatusCode, respBody, true)
 		outcome.Error = err.Error()
 		return outcome, nil
 	}
@@ -761,12 +766,16 @@ func auditAnthropicChannel(ctx context.Context, channel *model.Channel, probe *m
 }
 
 func finishQualityResponse(outcome qualityAuditOutcome, statuses []int, assertions []model.ChannelQualityAssertion, status int, respBody []byte) qualityAuditOutcome {
+	outcome.Response = captureQualityResponse(status, respBody, false)
 	if len(respBody) > maxQualityResponseBytes {
 		outcome.Error = "upstream response is too large"
 		return outcome
 	}
 	if !slices.Contains(statuses, status) {
 		outcome.Verdict = model.ChannelQualityVerdictFailed
+		if qualityStatusUnknown(status) {
+			outcome.Verdict = model.ChannelQualityVerdictUnknown
+		}
 		outcome.Error = fmt.Sprintf("upstream status %d: %s", status, trimQualitySnippet(respBody))
 		return outcome
 	}
@@ -796,6 +805,15 @@ func finishQualityResponse(outcome qualityAuditOutcome, statuses []int, assertio
 	return outcome
 }
 
+func qualityStatusUnknown(status int) bool {
+	switch status {
+	case http.StatusRequestTimeout, http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
 func applyQualityProbeModel(body map[string]any, selectedModel string) (string, error) {
 	raw, _ := body["model"].(string)
 	raw = strings.TrimSpace(raw)
@@ -809,6 +827,9 @@ func applyQualityProbeModel(body map[string]any, selectedModel string) (string, 
 	}
 	if raw == "" {
 		return "", errors.New("probe body is missing model")
+	}
+	if selectedModel != "" && raw != selectedModel {
+		return "", errors.New("probe model does not match the selected model")
 	}
 	return raw, nil
 }

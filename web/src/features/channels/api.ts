@@ -824,6 +824,25 @@ export type ChannelQualityRunPage = {
   items: ChannelQualityRun[]
 }
 
+export type ChannelQualityResponseBody = {
+  run_id: number
+  status_code: number
+  body_base64: string
+  formatted_body?: string | null
+  truncated: boolean
+  incomplete: boolean
+}
+
+export async function getChannelQualityResponse(
+  channelId: number,
+  runId: number
+): Promise<ChannelQualityResponse<ChannelQualityResponseBody | null>> {
+  const res = await api.get(
+    `/api/channel/${channelId}/quality/runs/${runId}/response`
+  )
+  return res.data
+}
+
 export async function getChannelQualityRun(
   channelId: number
 ): Promise<ChannelQualityResponse<ChannelQualityRun | null>> {

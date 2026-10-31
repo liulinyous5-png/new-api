@@ -17,12 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useMemo, useRef, useEffect } from 'react'
+import { useMemo, useRef, useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import * as z from 'zod'
 
+import { Dialog } from '@/components/dialog'
+import { Button } from '@/components/ui/button'
 import {
   Form,
   FormControl,
@@ -44,8 +46,11 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { ChannelQualityWebhook } from '@/features/channels/components/dialogs/channel-quality-webhook'
 import { handleServerError } from '@/lib/handle-server-error'
 import { parseHttpStatusCodeRules } from '@/lib/http-status-code-rules'
+import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   SettingsControlChildren,
@@ -243,6 +248,8 @@ export function ChannelHealthSection({
   defaultValues,
 }: ChannelHealthSectionProps) {
   const { t } = useTranslation()
+  const currentUser = useAuthStore((state) => state.auth.user)
+  const [webhookOpen, setWebhookOpen] = useState(false)
   const updateOption = useSavePolicy()
   const channelHealthSchema = createChannelHealthSchema(t)
   const baselineRef = useRef<NormalizedChannelHealthValues>(
@@ -511,7 +518,11 @@ export function ChannelHealthSection({
 
           <Separator />
 
-          <div className='flex min-w-0 flex-col gap-4'>
+          <div
+            role='group'
+            aria-label={t('Scheduled quality scan')}
+            className='flex min-w-0 flex-col gap-4'
+          >
             <h4 className='text-sm font-medium'>
               {t('Scheduled quality scan')}
             </h4>
@@ -565,6 +576,16 @@ export function ChannelHealthSection({
                 )}
               />
             </SettingsFormGrid>
+            {currentUser?.role === ROLE.SUPER_ADMIN ? (
+              <Button
+                type='button'
+                variant='outline'
+                className='self-start'
+                onClick={() => setWebhookOpen(true)}
+              >
+                {t('Quality Webhook alerts')}
+              </Button>
+            ) : null}
           </div>
 
           <Separator />
@@ -679,6 +700,16 @@ export function ChannelHealthSection({
           </div>
         </SettingsForm>
       </Form>
+      <Dialog
+        open={webhookOpen}
+        onOpenChange={setWebhookOpen}
+        title={t('Quality Webhook alerts')}
+        contentClassName='sm:max-w-xl'
+      >
+        {webhookOpen && currentUser?.role === ROLE.SUPER_ADMIN ? (
+          <ChannelQualityWebhook />
+        ) : null}
+      </Dialog>
     </SettingsSection>
   )
 }

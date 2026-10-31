@@ -139,6 +139,10 @@ func executeCall(ctx context.Context, client *http.Client, target string, apiKey
 	}
 	if !slices.Contains(call.Statuses, response.StatusCode) {
 		result.Verdict = "failed"
+		switch response.StatusCode {
+		case http.StatusRequestTimeout, http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			result.Verdict = "unknown"
+		}
 		result.Error = "unexpected status code"
 		return result
 	}
@@ -221,7 +225,7 @@ func publicError(err error) string {
 	case strings.Contains(text, "only http and https endpoints can be audited"):
 		return "only http and https endpoints can be audited"
 	default:
-		return "endpoint address is not allowed"
+		return "upstream request failed"
 	}
 }
 
@@ -237,12 +241,15 @@ func aggregate(results []ItemResult) string {
 		return "error"
 	}
 	failed := false
+	unknown := false
 	errored := false
 	passed := false
 	for _, result := range results {
 		switch result.Verdict {
 		case "failed":
 			failed = true
+		case "unknown":
+			unknown = true
 		case "error":
 			errored = true
 		case "passed":
@@ -254,6 +261,8 @@ func aggregate(results []ItemResult) string {
 		return "failed"
 	case errored:
 		return "error"
+	case unknown:
+		return "unknown"
 	case passed:
 		return "passed"
 	default:

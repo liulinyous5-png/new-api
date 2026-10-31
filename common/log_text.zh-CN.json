@@ -1,4 +1,5 @@
 {
+  "quality audit webhook delivery failed": "质量审计 Webhook 告警发送失败",
   "%d quota points": "%d 点额度",
   "%s after refresh: %s": "%s（刷新凭证后重试）: %s",
   "%s failed: %s": "%s 构建失败，%s",

@@ -44,6 +44,7 @@ const modes: QualityMatchMode[] = ['field', 'any', 'all']
 const operators: QualityCompareOp[] = [
   'eq',
   'neq',
+  'contains',
   'notEmpty',
   'gt',
   'gte',
@@ -61,6 +62,7 @@ const modeLabel: Record<QualityMatchMode, string> = {
 const operatorLabel: Record<QualityCompareOp, string> = {
   eq: 'Equals',
   neq: 'Does not equal',
+  contains: 'Contains',
   notEmpty: 'Is not empty',
   gt: 'Greater than',
   gte: 'Greater than or equal',
@@ -95,7 +97,8 @@ export function ChannelQualityAssertionFields(
   const { t } = useTranslation()
   const model = props.model
   const textOperators = operators.filter(
-    (op) => op === 'eq' || op === 'neq' || op === 'notEmpty'
+    (op) =>
+      op === 'eq' || op === 'neq' || op === 'contains' || op === 'notEmpty'
   )
 
   return (
@@ -196,6 +199,7 @@ export function ChannelQualityAssertionFields(
                     value === 'text' &&
                     condition.op !== 'eq' &&
                     condition.op !== 'neq' &&
+                    condition.op !== 'contains' &&
                     condition.op !== 'notEmpty'
                       ? 'eq'
                       : condition.op
@@ -297,6 +301,7 @@ function isOperator(value: unknown): value is QualityCompareOp {
   return (
     value === 'eq' ||
     value === 'neq' ||
+    value === 'contains' ||
     value === 'notEmpty' ||
     value === 'gt' ||
     value === 'gte' ||

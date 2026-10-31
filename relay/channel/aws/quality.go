@@ -20,6 +20,7 @@ package aws
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -29,6 +30,8 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/smithy-go/middleware"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/gin-gonic/gin"
 )
 
@@ -112,7 +115,7 @@ func (a *Adaptor) ExecuteQuality(c *gin.Context, info *relaycommon.RelayInfo, bo
 		defer resp.Body.Close()
 		respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxQualityResponseBytes))
 		if err != nil {
-			return 0, nil, err
+			return resp.StatusCode, respBody, err
 		}
 		return resp.StatusCode, respBody, nil
 	case "", dto.AwsApiTypeInvokeModel:
@@ -131,17 +134,47 @@ func (a *Adaptor) ExecuteQuality(c *gin.Context, info *relaycommon.RelayInfo, bo
 		if !ok || a.AwsClient == nil {
 			return 0, nil, errors.New("aws invoke request was not prepared")
 		}
-		awsResp, err := a.AwsClient.InvokeModel(ctx, input)
+		var status int
+		var rawBody []byte
+		var readErr error
+		// Capture before the SDK consumes/deserializes error responses. The
+		// audit retains at most the size limit plus one truncation sentinel.
+		awsResp, err := a.AwsClient.InvokeModel(ctx, input, func(options *bedrockruntime.Options) {
+			options.APIOptions = append(options.APIOptions, func(stack *middleware.Stack) error {
+				return stack.Deserialize.Insert(middleware.DeserializeMiddlewareFunc("QualityResponse", func(ctx context.Context, in middleware.DeserializeInput, next middleware.DeserializeHandler) (middleware.DeserializeOutput, middleware.Metadata, error) {
+					status, rawBody, readErr = 0, nil, nil
+					out, metadata, err := next.HandleDeserialize(ctx, in)
+					if err != nil {
+						return out, metadata, err
+					}
+					resp, ok := out.RawResponse.(*smithyhttp.Response)
+					if !ok || resp.Body == nil {
+						return out, metadata, nil
+					}
+					status = resp.StatusCode
+					rawBody, readErr = io.ReadAll(io.LimitReader(resp.Body, maxQualityResponseBytes))
+					_ = resp.Body.Close()
+					resp.Body = io.NopCloser(bytes.NewReader(rawBody))
+					return out, metadata, readErr
+				}), "OperationDeserializer", middleware.After)
+			})
+		})
+		if readErr != nil {
+			return status, rawBody, readErr
+		}
 		if err != nil {
 			if c.Request.Context().Err() != nil {
-				return 0, nil, c.Request.Context().Err()
+				return status, rawBody, c.Request.Context().Err()
 			}
-			return getAwsErrorStatusCode(err), []byte(err.Error()), nil
+			if ctx.Err() != nil {
+				return status, rawBody, ctx.Err()
+			}
+			if status > 0 {
+				return status, rawBody, nil
+			}
+			return 0, nil, err
 		}
-		if len(awsResp.Body) > maxQualityResponseBytes-1 {
-			return 0, nil, errors.New("upstream response is too large")
-		}
-		return http.StatusOK, awsResp.Body, nil
+		return http.StatusOK, awsResp.Body[:min(len(awsResp.Body), maxQualityResponseBytes)], nil
 	default:
 		return 0, nil, &QualityUnsupportedError{Reason: "this AWS channel mode cannot run a Messages probe"}
 	}

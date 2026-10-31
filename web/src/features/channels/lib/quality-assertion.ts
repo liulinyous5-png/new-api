@@ -22,6 +22,7 @@ export type QualityMatchMode = 'field' | 'any' | 'all'
 export type QualityCompareOp =
   | 'eq'
   | 'neq'
+  | 'contains'
   | 'notEmpty'
   | 'gt'
   | 'gte'
@@ -46,7 +47,10 @@ export type QualityAssertionModel = {
 const fieldPattern = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/
 const numberPattern = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/
 
-const opSource: Record<Exclude<QualityCompareOp, 'notEmpty'>, string> = {
+const opSource: Record<
+  Exclude<QualityCompareOp, 'notEmpty' | 'contains'>,
+  string
+> = {
   eq: '==',
   neq: '!=',
   gt: '>',
@@ -135,6 +139,12 @@ function compileCondition(
   if (condition.op === 'notEmpty') {
     return `notEmpty(${path})`
   }
+  if (condition.op === 'contains') {
+    if (condition.value === '') {
+      throw new Error('condition is incomplete')
+    }
+    return `${path} contains ${JSON.stringify(condition.value)}`
+  }
   const op = opSource[condition.op]
   if (condition.kind === 'number') {
     const value = condition.value.trim()
@@ -157,6 +167,22 @@ function parseCondition(source: string): QualityCondition | null {
     const field = normalizeField(present[1])
     if (!field) return null
     return { field, op: 'notEmpty', kind: 'text', value: '' }
+  }
+  const contained =
+    /^(\.?[A-Za-z_][A-Za-z0-9_?.]*)\s+contains\s+"((?:\\.|[^"\\])*)"$/.exec(
+      source.trim()
+    )
+  if (contained) {
+    const field = normalizeField(contained[1])
+    if (!field) return null
+    let value = ''
+    try {
+      value = JSON.parse(`"${contained[2]}"`) as string
+    } catch {
+      return null
+    }
+    if (value === '') return null
+    return { field, op: 'contains', kind: 'text', value }
   }
   const numeric =
     /^(?:int|float)\(\s*([^)]+?)\s*\)\s*(==|!=|>=|<=|>|<)\s*(-?\d+(?:\.\d+)?)$/.exec(

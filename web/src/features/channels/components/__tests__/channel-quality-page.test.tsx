@@ -31,10 +31,15 @@ import { api } from '@/lib/api'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
-import type { ChannelQualityProbe, ChannelQualityRun } from '../../api'
+import type {
+  ChannelQualityProbe,
+  ChannelQualityRun,
+  ChannelQualitySuite,
+} from '../../api'
 import { ChannelQualityPage } from '../../channel-quality-page'
 import { CHANNEL_TYPE_ANTHROPIC, CHANNEL_TYPE_AWS } from '../../constants'
 import { channelSchema, type Channel } from '../../types'
+import { ChannelQualitySuites } from '../dialogs/channel-quality-suites'
 
 const originalAuth = useAuthStore.getState().auth
 let client: QueryClient
@@ -146,6 +151,114 @@ function renderPage(row: Channel, run: ChannelQualityRun | null) {
   )
 }
 
+function renderSuites() {
+  return render(
+    <QueryClientProvider client={client}>
+      <ChannelQualitySuites canWrite />
+    </QueryClientProvider>
+  )
+}
+
+const suite: ChannelQualitySuite = {
+  id: 5,
+  name: 'Nightly checks',
+  created_at: 1,
+  updated_at: 1,
+  items: [
+    { id: 1, probe_id: 3, model: 'claude-sonnet', sort: 0 },
+    { id: 2, probe_id: 3, model: 'claude-opus', sort: 1 },
+  ],
+}
+
+it('updates an open result when the running record finishes', async () => {
+  const user = userEvent.setup()
+  const running = {
+    ...passedRun(),
+    verdict: 'running',
+    assertion_results: null,
+  }
+  renderPage(channel(CHANNEL_TYPE_ANTHROPIC), running)
+  await user.click(await screen.findByRole('tab', { name: 'Audit records' }))
+  await user.click(
+    await screen.findByRole('button', { name: /clear_tool_uses/ })
+  )
+  const dialog = await screen.findByRole('dialog', { name: 'clear_tool_uses' })
+  expect(within(dialog).getByText('Running')).toBeInTheDocument()
+  vi.mocked(api.get).mockImplementation(async (url) => ({
+    data: {
+      success: true,
+      data: String(url).endsWith('/runs')
+        ? { items: [passedRun()], total: 1, page: 1, page_size: 10 }
+        : passedRun(),
+    },
+  }))
+  await client.refetchQueries({ queryKey: ['channels', 'quality', 'runs', 8] })
+  expect(await within(dialog).findAllByText('Passed')).toHaveLength(2)
+  expect(within(dialog).queryByText('Running')).not.toBeInTheDocument()
+})
+
+it('shows loading instead of an empty suite list while fetching', async () => {
+  let resolve!: (value: {
+    data: { success: boolean; data: ChannelQualitySuite[] }
+  }) => void
+  vi.spyOn(api, 'get').mockImplementation((url) => {
+    if (url === '/api/channel/quality/suites') {
+      return new Promise((done) => {
+        resolve = done
+      })
+    }
+    return Promise.resolve({ data: { success: true, data: [builtinProbe] } })
+  })
+  renderSuites()
+  expect(screen.getByText('Loading...')).toBeInTheDocument()
+  expect(screen.queryByText('No quality suites yet')).not.toBeInTheDocument()
+  resolve({ data: { success: true, data: [] } })
+  expect(await screen.findByText('No quality suites yet')).toBeInTheDocument()
+})
+
+it('offers retry after a suite request fails without showing an empty list', async () => {
+  const user = userEvent.setup()
+  let failed = true
+  vi.spyOn(api, 'get').mockImplementation(async (url) => {
+    if (url === '/api/channel/quality/suites' && failed) {
+      throw new Error('offline')
+    }
+    return {
+      data: {
+        success: true,
+        data: url === '/api/channel/quality/suites' ? [suite] : [builtinProbe],
+      },
+    }
+  })
+  renderSuites()
+  const retry = await screen.findByRole('button', { name: 'Retry' })
+  expect(screen.queryByText('No quality suites yet')).not.toBeInTheDocument()
+  failed = false
+  await user.click(retry)
+  expect(await screen.findByText('Nightly checks')).toBeInTheDocument()
+})
+
+it('filters suites by model and opens an explicit edit action', async () => {
+  const user = userEvent.setup()
+  vi.spyOn(api, 'get').mockImplementation(async (url) => ({
+    data: {
+      success: true,
+      data: url === '/api/channel/quality/suites' ? [suite] : [builtinProbe],
+    },
+  }))
+  renderSuites()
+  expect(await screen.findByText('Nightly checks')).toBeInTheDocument()
+  const search = screen.getByRole('textbox', { name: 'Search suites' })
+  await user.type(search, 'not-found')
+  expect(screen.getByText('No results found')).toBeInTheDocument()
+  await user.clear(search)
+  await user.type(search, 'claude-opus')
+  await user.click(screen.getByRole('button', { name: 'Edit Nightly checks' }))
+  expect(
+    await screen.findByRole('dialog', { name: 'Quality suite' })
+  ).toBeInTheDocument()
+})
+
 beforeEach(() => {
   client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -168,6 +281,9 @@ afterEach(() => {
 it('hides channels that are not Anthropic or AWS', async () => {
   const user = userEvent.setup()
   renderPage(channel(1), null)
+  expect(
+    screen.queryByRole('button', { name: 'Quality Webhook alerts' })
+  ).not.toBeInTheDocument()
   expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
     'Manage suites',
     'Manage probes',
@@ -189,6 +305,19 @@ it('hides channels that are not Anthropic or AWS', async () => {
   expect(
     screen.queryByRole('button', { name: 'Run audit' })
   ).not.toBeInTheDocument()
+})
+
+it('does not fetch channel results until the records tab is opened', async () => {
+  renderPage(channel(CHANNEL_TYPE_ANTHROPIC), null)
+  expect(await screen.findByText('No quality suites yet')).toBeInTheDocument()
+  expect(
+    vi
+      .mocked(api.get)
+      .mock.calls.some(
+        ([url]) =>
+          url === '/api/channel' || url === '/api/channel/quality/latest'
+      )
+  ).toBe(false)
 })
 
 it('lets an AWS channel run a Messages audit', async () => {
@@ -302,4 +431,59 @@ it('adds a custom status, a header row, and an assertion from the new probe form
     await screen.findByRole('dialog', { name: 'Add assertion' })
   ).toBeInTheDocument()
   expect(screen.getByLabelText('Assertion name')).toBeInTheDocument()
+})
+
+it('wraps long suite names and model identifiers without hiding their text', async () => {
+  const longName = 'Quality'.repeat(40)
+  const longModel = 'claude-'.repeat(40)
+  vi.spyOn(api, 'get').mockImplementation(async (url) => ({
+    data: {
+      success: true,
+      data:
+        url === '/api/channel/quality/suites'
+          ? [
+              {
+                ...suite,
+                name: longName,
+                items: [{ ...suite.items[0], model: longModel }],
+              },
+            ]
+          : [builtinProbe],
+    },
+  }))
+  renderSuites()
+  const heading = await screen.findByRole('heading', { name: longName })
+  expect(heading.parentElement).toHaveClass('break-words')
+  expect(screen.getByText(longModel)).toHaveClass('break-all')
+  expect(screen.getAllByRole('listitem')).toHaveLength(1)
+})
+
+it('opens suite details with the keyboard for a read-only user', async () => {
+  const user = userEvent.setup()
+  vi.spyOn(api, 'get').mockImplementation(async (url) => ({
+    data: {
+      success: true,
+      data: url === '/api/channel/quality/suites' ? [suite] : [builtinProbe],
+    },
+  }))
+  render(
+    <QueryClientProvider client={client}>
+      <ChannelQualitySuites canWrite={false} />
+    </QueryClientProvider>
+  )
+  const view = await screen.findByRole('button', {
+    name: 'View details: Nightly checks',
+  })
+  view.focus()
+  await user.keyboard('{Enter}')
+  expect(
+    await screen.findByRole('dialog', { name: 'Quality suite' })
+  ).toBeInTheDocument()
+  expect(screen.getByLabelText('Suite name')).toBeDisabled()
+  expect(
+    screen.queryByRole('button', { name: 'Save suite' })
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole('button', { name: 'Delete' })
+  ).not.toBeInTheDocument()
 })

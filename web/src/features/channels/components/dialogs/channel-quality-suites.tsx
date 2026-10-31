@@ -17,12 +17,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Dialog } from '@/components/dialog'
+import { EmptyState } from '@/components/empty-state'
+import { ErrorState } from '@/components/error-state'
+import { LoadingState } from '@/components/loading-state'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -44,6 +47,7 @@ import {
   type ChannelQualitySuite,
 } from '../../api'
 import { channelsQueryKeys } from '../../lib'
+import { ChannelQualitySuiteList } from './channel-quality-suite-list'
 
 type SuiteItemDraft = {
   key: string
@@ -122,43 +126,48 @@ export function ChannelQualitySuites(props: { canWrite: boolean }) {
   const suites = suitesQuery.data ?? []
   const probes = probesQuery.data ?? []
 
+  let listContent: ReactNode
+  if (suitesQuery.isPending || probesQuery.isPending) {
+    listContent = <LoadingState />
+  } else if (suitesQuery.isError || probesQuery.isError) {
+    listContent = (
+      <ErrorState
+        onRetry={() => {
+          void Promise.all([suitesQuery.refetch(), probesQuery.refetch()])
+        }}
+      />
+    )
+  } else if (suites.length === 0) {
+    listContent = <EmptyState title={t('No quality suites yet')} />
+  } else {
+    listContent = (
+      <ChannelQualitySuiteList
+        suites={suites}
+        probes={probes}
+        canWrite={props.canWrite}
+        onEdit={(suite) => setDraft(draftFromSuite(suite))}
+      />
+    )
+  }
+
   return (
     <div className='flex flex-col gap-3'>
       {props.canWrite ? (
         <Button
           type='button'
           className='self-start'
+          disabled={
+            suitesQuery.isPending ||
+            suitesQuery.isError ||
+            probesQuery.isPending ||
+            probesQuery.isError
+          }
           onClick={() => setDraft(emptySuite())}
         >
           {t('New suite')}
         </Button>
       ) : null}
-      {suites.length === 0 ? (
-        <p className='text-muted-foreground text-sm'>
-          {t('No quality suites yet')}
-        </p>
-      ) : (
-        <div className='flex flex-col gap-2'>
-          {suites.map((suite) => (
-            <button
-              key={suite.id}
-              type='button'
-              className='hover:bg-muted rounded-lg border px-3 py-2 text-left'
-              onClick={() => setDraft(draftFromSuite(suite))}
-            >
-              <span className='block text-sm font-medium'>{suite.name}</span>
-              <span className='text-muted-foreground text-xs'>
-                {suite.items
-                  .map(
-                    (item) =>
-                      `${probeName(probes, item.probe_id)} · ${item.model}`
-                  )
-                  .join(', ')}
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
+      {listContent}
       <Dialog
         open={draft != null}
         onOpenChange={(open) => {
@@ -195,7 +204,11 @@ export function ChannelQualitySuites(props: { canWrite: boolean }) {
                 {props.canWrite ? (
                   <Button
                     type='button'
-                    disabled={save.isPending}
+                    disabled={
+                      save.isPending ||
+                      probesQuery.isPending ||
+                      probesQuery.isError
+                    }
                     onClick={() => {
                       const message = suiteDraftError(draft)
                       if (message) {
@@ -217,7 +230,7 @@ export function ChannelQualitySuites(props: { canWrite: boolean }) {
           <SuiteFields
             draft={draft}
             probes={probes.map((probe) => ({ id: probe.id, name: probe.name }))}
-            disabled={!props.canWrite}
+            disabled={!props.canWrite || save.isPending}
             onChange={setDraft}
           />
         ) : null}
@@ -367,13 +380,6 @@ function draftFromSuite(suite: ChannelQualitySuite): SuiteDraft {
       model: item.model,
     })),
   }
-}
-
-function probeName(
-  probes: { id: number; name: string }[],
-  probeId: number
-): string {
-  return probes.find((probe) => probe.id === probeId)?.name ?? String(probeId)
 }
 
 function suiteDraftError(draft: SuiteDraft): string | null {

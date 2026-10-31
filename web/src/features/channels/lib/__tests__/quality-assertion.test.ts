@@ -92,6 +92,25 @@ it('compiles a field that only needs to be present', () => {
   })
 })
 
+it('compiles and reads a text contains condition', () => {
+  expect(
+    compileQualityAssertion({
+      mode: 'field',
+      listPath: '',
+      conditions: [
+        { field: 'content.text', op: 'contains', kind: 'text', value: 'opus' },
+      ],
+    })
+  ).toBe('content?.text contains "opus"')
+  expect(parseQualityAssertion('content?.text contains "opus"')).toEqual({
+    mode: 'field',
+    listPath: '',
+    conditions: [
+      { field: 'content.text', op: 'contains', kind: 'text', value: 'opus' },
+    ],
+  })
+})
+
 it('rejects an incomplete field path', () => {
   expect(() =>
     compileQualityAssertion({

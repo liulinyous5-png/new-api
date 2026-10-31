@@ -260,6 +260,8 @@ func SetApiRouter(router *gin.Engine) {
 			monitorRoute.PUT("/ttft/config", controller.UpdateTTFTMonitorConfig)
 			monitorRoute.GET("/channel_disable/config", controller.GetChannelDisableMonitorConfig)
 			monitorRoute.PUT("/channel_disable/config", controller.UpdateChannelDisableMonitorConfig)
+			monitorRoute.GET("/quality_webhook/config", controller.GetQualityWebhookConfig)
+			monitorRoute.PUT("/quality_webhook/config", controller.UpdateQualityWebhookConfig)
 		}
 		ratioSyncRoute := apiRouter.Group("/ratio_sync")
 		ratioSyncRoute.Use(middleware.RootAuth())

@@ -13,6 +13,7 @@ const (
 	ChannelQualityVerdictRunning     = "running"
 	ChannelQualityVerdictPassed      = "passed"
 	ChannelQualityVerdictFailed      = "failed"
+	ChannelQualityVerdictUnknown     = "unknown"
 	ChannelQualityVerdictError       = "error"
 	ChannelQualityVerdictUnsupported = "unsupported"
 	ChannelQualityVerdictSkipped     = "skipped"
@@ -177,7 +178,12 @@ func CreateChannelQualityRun(run *ChannelQualityRun) error {
 }
 
 func SaveChannelQualityRun(run *ChannelQualityRun) error {
-	return DB.Model(&ChannelQualityRun{}).Where("id = ?", run.Id).Updates(map[string]any{
+	return saveChannelQualityRun(DB, run)
+}
+
+func saveChannelQualityRun(tx *gorm.DB, run *ChannelQualityRun) error {
+	return tx.Model(&ChannelQualityRun{}).Where("id = ?", run.Id).Updates(map[string]any{
+		"probe_name":        run.ProbeName,
 		"requested_model":   run.RequestedModel,
 		"upstream_model":    run.UpstreamModel,
 		"probe_snapshot":    run.ProbeSnapshot,
@@ -229,33 +235,43 @@ type ChannelQualityLatest struct {
 }
 
 func ListLatestChannelQualityRuns() ([]ChannelQualityLatest, error) {
-	type idRow struct {
-		ID int `gorm:"column:id"`
-	}
-	var rows []idRow
-	if err := DB.Model(&ChannelQualityRun{}).Select("MAX(id) AS id").Group("channel_id").Scan(&rows).Error; err != nil {
+	// Read only the summary fields, using two batched queries regardless of the
+	// number of channels. A suite's final child is not its aggregate verdict.
+	var runs []ChannelQualityRun
+	latestRunIDs := DB.Model(&ChannelQualityRun{}).Select("MAX(id)").Group("channel_id")
+	if err := DB.Select("channel_id", "verdict", "created_at", "suite_run_id").
+		Where("id IN (?)", latestRunIDs).Find(&runs).Error; err != nil {
 		return nil, err
 	}
-	ids := make([]int, 0, len(rows))
-	for _, row := range rows {
-		if row.ID > 0 {
-			ids = append(ids, row.ID)
-		}
-	}
-	if len(ids) == 0 {
-		return []ChannelQualityLatest{}, nil
-	}
-	var runs []ChannelQualityRun
-	if err := DB.Where("id IN ?", ids).Find(&runs).Error; err != nil {
+	var suites []ChannelQualitySuiteRun
+	latestSuiteIDs := DB.Model(&ChannelQualitySuiteRun{}).Select("MAX(id)").Group("channel_id")
+	if err := DB.Select("id", "channel_id", "verdict", "created_at").
+		Where("id IN (?)", latestSuiteIDs).Find(&suites).Error; err != nil {
 		return nil, err
 	}
 	latest := make([]ChannelQualityLatest, 0, len(runs))
+	indices := make(map[int]int, len(runs))
+	suiteIDs := make(map[int]int, len(runs))
 	for _, run := range runs {
+		indices[run.ChannelId] = len(latest)
+		suiteIDs[run.ChannelId] = run.SuiteRunId
 		latest = append(latest, ChannelQualityLatest{
 			ChannelId: run.ChannelId,
 			Verdict:   run.Verdict,
 			CreatedAt: run.CreatedAt,
 		})
+	}
+	for _, suite := range suites {
+		index, exists := indices[suite.ChannelId]
+		if exists && suiteIDs[suite.ChannelId] != suite.Id && latest[index].CreatedAt >= suite.CreatedAt {
+			continue
+		}
+		item := ChannelQualityLatest{ChannelId: suite.ChannelId, Verdict: suite.Verdict, CreatedAt: suite.CreatedAt}
+		if exists {
+			latest[index] = item
+		} else {
+			latest = append(latest, item)
+		}
 	}
 	return latest, nil
 }

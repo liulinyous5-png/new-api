@@ -17,12 +17,24 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, render, screen, within } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import {
+  cleanup,
+  render,
+  screen,
+  within,
+  waitFor,
+} from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { api } from '@/lib/api'
+import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { ChannelHealthSection } from '../channel-health-section'
 import { defaultRequestPolicySettings } from '../defaults'
 
+const originalAuth = useAuthStore.getState().auth
 let client: QueryClient
 
 beforeEach(() => {
@@ -34,6 +46,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   client.clear()
+  vi.restoreAllMocks()
+  useAuthStore.setState({ auth: originalAuth })
 })
 
 function show() {
@@ -98,4 +112,54 @@ describe('channel health layout', () => {
       expect(formItemOf(control)?.parentElement).toBe(grid)
     }
   })
+})
+
+it('opens Webhook settings under scheduled quality scan and saves independently', async () => {
+  const user = userEvent.setup()
+  useAuthStore.setState({
+    auth: {
+      ...originalAuth,
+      user: { id: 1, username: 'root', role: ROLE.SUPER_ADMIN },
+    },
+  })
+  const get = vi
+    .spyOn(api, 'get')
+    .mockResolvedValue({
+      data: {
+        success: true,
+        data: {
+          enabled: true,
+          url: 'https://example.com/quality',
+          cooldown_seconds: 600,
+          secret_configured: false,
+        },
+      },
+    })
+  const put = vi
+    .spyOn(api, 'put')
+    .mockResolvedValue({ data: { success: true } })
+  const patch = vi.spyOn(api, 'patch')
+  show()
+  expect(get).not.toHaveBeenCalled()
+  const scan = screen.getByRole('group', { name: 'Scheduled quality scan' })
+  await user.click(
+    within(scan).getByRole('button', { name: 'Quality Webhook alerts' })
+  )
+  const dialog = await screen.findByRole('dialog', {
+    name: 'Quality Webhook alerts',
+  })
+  const cooldown = await within(dialog).findByLabelText(
+    'Webhook cooldown (seconds)'
+  )
+  await user.clear(cooldown)
+  await user.type(cooldown, '120')
+  await user.click(within(dialog).getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith('/api/monitor/quality_webhook/config', {
+      enabled: true,
+      url: 'https://example.com/quality',
+      cooldown_seconds: 120,
+    })
+  )
+  expect(patch).not.toHaveBeenCalled()
 })

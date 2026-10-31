@@ -253,6 +253,13 @@ func bindQualitySuite(c *gin.Context, id int) (*model.ChannelQualitySuite, []*mo
 		if probe == nil {
 			return nil, nil, errors.New("probe not found")
 		}
+		var body map[string]any
+		if err := common.Unmarshal([]byte(probe.Body), &body); err != nil || body == nil {
+			return nil, nil, errors.New("probe body must be a JSON object")
+		}
+		if _, err := applyQualityProbeModel(body, modelName); err != nil {
+			return nil, nil, err
+		}
 		key := strconv.Itoa(raw.ProbeID) + "\x00" + modelName
 		if _, ok := seen[key]; ok {
 			return nil, nil, errors.New("a quality suite lists this probe and model more than once")
@@ -272,12 +279,15 @@ func qualitySuiteVerdict(verdicts []string) string {
 	}
 	passed := false
 	failed := false
+	unknown := false
 	errored := false
 	unsupported := false
 	for _, verdict := range verdicts {
 		switch verdict {
 		case model.ChannelQualityVerdictFailed:
 			failed = true
+		case model.ChannelQualityVerdictUnknown:
+			unknown = true
 		case model.ChannelQualityVerdictError:
 			errored = true
 		case model.ChannelQualityVerdictPassed:
@@ -291,6 +301,9 @@ func qualitySuiteVerdict(verdicts []string) string {
 	}
 	if errored {
 		return model.ChannelQualityVerdictError
+	}
+	if unknown {
+		return model.ChannelQualityVerdictUnknown
 	}
 	if passed {
 		return model.ChannelQualityVerdictPassed
@@ -310,6 +323,8 @@ func runChannelQualityScan(ctx context.Context) (map[string]int, error) {
 		return nil, err
 	}
 	summary := map[string]int{"channels": len(channels)}
+	webhookConfig, configErr := service.GetQualityWebhookConfig()
+	var alerts []service.QualityWebhookAlert
 	for _, channel := range channels {
 		if ctx.Err() != nil {
 			return summary, ctx.Err()
@@ -319,6 +334,30 @@ func runChannelQualityScan(ctx context.Context) (map[string]int, error) {
 			return summary, err
 		}
 		summary[verdict]++
+		if configErr == nil && webhookConfig.Enabled {
+			if verdict == model.ChannelQualityVerdictPassed {
+				service.ClearQualityWebhookCooldown(channel.Id, channel.QualitySuiteId)
+			}
+			run, items, readErr := model.GetLatestChannelQualitySuiteRun(channel.Id)
+			if readErr != nil {
+				summary["webhook_errors"]++
+			}
+			if readErr == nil && run != nil {
+				if alert := service.BuildQualityWebhookAlert(channel, run, items); alert != nil {
+					alerts = append(alerts, *alert)
+				}
+			}
+		}
+	}
+	if configErr != nil {
+		summary["webhook_errors"]++
+	} else if len(alerts) > 0 {
+		delivered, err := service.DeliverQualityWebhooks(ctx, alerts)
+		summary["webhook_delivered"] = delivered
+		if err != nil {
+			summary["webhook_errors"]++
+			common.SysError(common.LogText("quality audit webhook delivery failed") + ": " + err.Error())
+		}
 	}
 	return summary, nil
 }
@@ -372,7 +411,8 @@ func runChannelQualitySuite(ctx context.Context, channel *model.Channel) (string
 		}
 		verdict, err := executeQualitySuiteItem(ctx, channel, item, run.Id)
 		if err != nil {
-			return "", err
+			_, finishErr := finishSavedQualitySuiteRun(run, model.ChannelQualityVerdictError, "failed to save quality audit response")
+			return "", errors.Join(err, finishErr)
 		}
 		verdicts = append(verdicts, verdict)
 		if ctx.Err() != nil {
@@ -433,7 +473,11 @@ func executeQualitySuiteItem(ctx context.Context, channel *model.Channel, item *
 	}
 	outcome, err := auditAnthropicChannel(ctx, channel, probe, item.Model, nil)
 	applyQualityOutcome(run, outcome, err)
-	return run.Verdict, model.SaveChannelQualityRun(run)
+	if saveErr := model.SaveChannelQualityResult(run, outcome.Response); saveErr != nil {
+		failQualityRun(run, model.ChannelQualityVerdictError, "failed to save quality audit response")
+		return run.Verdict, saveErr
+	}
+	return run.Verdict, nil
 }
 
 func channelServesModel(channel *model.Channel, name string) bool {

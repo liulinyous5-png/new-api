@@ -17,14 +17,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { ErrorState } from '@/components/error-state'
 import { SectionPageLayout } from '@/components/layout'
+import { LoadingState } from '@/components/loading-state'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { EndpointTestPanel } from '@/features/endpoint-audit/test-panel'
+import { useDebounce } from '@/hooks/use-debounce'
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
@@ -63,8 +66,12 @@ export function ChannelQualityPage(props: ChannelQualityPageProps) {
     ADMIN_PERMISSION_ACTIONS.WRITE
   )
   const [keyword, setKeyword] = useState('')
-  const trimmedKeyword = keyword.trim()
+  const [activeTab, setActiveTab] = useState<string>(
+    props.initialTab ?? 'suites'
+  )
+  const trimmedKeyword = useDebounce(keyword.trim(), 300)
   const channelsQuery = useQuery({
+    enabled: activeTab === 'records',
     queryKey: [...channelsQueryKeys.lists(), 'quality-page', trimmedKeyword],
     queryFn: async () => {
       const pages = await Promise.all(
@@ -94,12 +101,17 @@ export function ChannelQualityPage(props: ChannelQualityPageProps) {
     },
   })
   const latestQuery = useQuery({
+    enabled: activeTab === 'records',
     queryKey: channelsQueryKeys.qualityLatest(),
     queryFn: async () => {
       const response = await listLatestChannelQuality()
       requireServerSuccess(response)
       return response.data ?? []
     },
+    refetchInterval: (query) =>
+      query.state.data?.some((item) => item.verdict === 'running')
+        ? 1500
+        : false,
   })
   const items = channelsQuery.data?.items ?? []
   const listed = items.find((item) => item.id === props.channelId)
@@ -110,7 +122,11 @@ export function ChannelQualityPage(props: ChannelQualityPageProps) {
       requireServerSuccess(response)
       return response.data ?? null
     },
-    enabled: Boolean(props.channelId) && !listed && !channelsQuery.isLoading,
+    enabled:
+      activeTab === 'records' &&
+      Boolean(props.channelId) &&
+      !listed &&
+      !channelsQuery.isLoading,
   })
   const fetched = detailQuery.data
   const selected =
@@ -121,11 +137,51 @@ export function ChannelQualityPage(props: ChannelQualityPageProps) {
       : null)
   const total = channelsQuery.data?.total ?? items.length
 
+  const verdicts = useMemo(
+    () =>
+      new Map(
+        (latestQuery.data ?? []).map((item) => [item.channel_id, item.verdict])
+      ),
+    [latestQuery.data]
+  )
+  let channelList: ReactNode
+  if (channelsQuery.isPending) {
+    channelList = <LoadingState />
+  } else if (channelsQuery.isError) {
+    channelList = (
+      <ErrorState
+        onRetry={() => {
+          void channelsQuery.refetch()
+        }}
+      />
+    )
+  } else if (items.length === 0) {
+    channelList = (
+      <p className='text-muted-foreground p-3 text-sm'>
+        {t('No channels found')}
+      </p>
+    )
+  } else {
+    channelList = items.map((item) => (
+      <ChannelQualityListItem
+        key={item.id}
+        channel={item}
+        verdict={verdicts.get(item.id)}
+        selected={item.id === props.channelId}
+        onSelect={props.onSelectChannel}
+      />
+    ))
+  }
+
   return (
     <SectionPageLayout>
       <SectionPageLayout.Title>{t('Quality audit')}</SectionPageLayout.Title>
       <SectionPageLayout.Content>
-        <Tabs defaultValue={props.initialTab ?? 'suites'} className='gap-4'>
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => setActiveTab(String(value))}
+          className='gap-4'
+        >
           <TabsList className='max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto'>
             <TabsTrigger value='suites'>{t('Manage suites')}</TabsTrigger>
             <TabsTrigger value='probes'>{t('Manage probes')}</TabsTrigger>
@@ -147,21 +203,7 @@ export function ChannelQualityPage(props: ChannelQualityPageProps) {
                   onChange={(event) => setKeyword(event.target.value)}
                 />
                 <div className='max-h-[32rem] overflow-y-auto rounded-lg border'>
-                  {items.length === 0 ? (
-                    <p className='text-muted-foreground p-3 text-sm'>
-                      {t('No channels found')}
-                    </p>
-                  ) : (
-                    items.map((item) => (
-                      <ChannelQualityListItem
-                        key={item.id}
-                        channel={item}
-                        verdict={verdictFor(latestQuery.data, item.id)}
-                        selected={item.id === props.channelId}
-                        onSelect={props.onSelectChannel}
-                      />
-                    ))
-                  )}
+                  {channelList}
                 </div>
                 {total > items.length ? (
                   <p className='text-muted-foreground text-xs'>
@@ -221,11 +263,4 @@ function ChannelQualityListItem(props: {
       ) : null}
     </Button>
   )
-}
-
-function verdictFor(
-  latest: { channel_id: number; verdict: string }[] | undefined,
-  channelId: number
-): string | undefined {
-  return latest?.find((item) => item.channel_id === channelId)?.verdict
 }

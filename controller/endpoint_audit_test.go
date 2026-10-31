@@ -42,20 +42,28 @@ import (
 
 func TestEndpointAuditRejectsUnsafeURLs(t *testing.T) {
 	ctx := t.Context()
-	cases := []string{
+	for _, raw := range []string{
 		"ftp://1.1.1.1/v1/messages",
 		"https://user:pass@1.1.1.1/v1/messages",
-		"https://127.0.0.1/v1/messages",
-		"http://10.1.1.1/v1/messages",
-		"https://169.254.169.254/latest",
-		"http://localhost/v1/messages",
-		"https://192.168.1.1",
-	}
-	for _, raw := range cases {
+	} {
 		_, err := endpointaudit.NormalizeMessagesURL(ctx, raw)
 		assert.Error(t, err, raw)
 	}
-	parsed, err := endpointaudit.NormalizeMessagesURL(ctx, "http://1.1.1.1")
+	for _, raw := range []string{
+		"https://127.0.0.1/v1/messages",
+		"http://10.1.1.1/v1/messages",
+		"http://localhost/v1/messages",
+		"https://192.168.1.1",
+		"https://198.18.4.174",
+	} {
+		parsed, err := endpointaudit.NormalizeMessagesURL(ctx, raw)
+		require.NoError(t, err, raw)
+		assert.Equal(t, "/v1/messages", parsed.Path, raw)
+	}
+	parsed, err := endpointaudit.NormalizeMessagesURL(ctx, "https://169.254.169.254/latest")
+	require.NoError(t, err)
+	assert.Equal(t, "/latest/v1/messages", parsed.Path)
+	parsed, err = endpointaudit.NormalizeMessagesURL(ctx, "http://1.1.1.1")
 	require.NoError(t, err)
 	assert.Equal(t, "http", parsed.Scheme)
 	assert.Equal(t, "/v1/messages", parsed.Path)
@@ -86,8 +94,6 @@ func TestEndpointAuditAssertionsAndStoredKey(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	restoreAllow := endpointaudit.AllowPrivateNetworksForTest(true)
-	t.Cleanup(restoreAllow)
 	client := endpointaudit.NewSafeClient()
 	transport := client.Transport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
@@ -141,13 +147,11 @@ func TestEndpointAuditAssertionsAndStoredKey(t *testing.T) {
 	engine.ServeHTTP(recorder, request)
 	assert.Equal(t, http.StatusBadRequest, recorder.Code)
 
-	blocked := httptest.NewRecorder()
+	local := httptest.NewRecorder()
 	request = httptest.NewRequest(http.MethodPost, "/tests", bytes.NewReader([]byte(`{"base_url":"https://127.0.0.1","api_key":"sk-test-secret-value","suite_id":`+strconv.Itoa(suiteID)+`}`)))
-	restoreAllow = endpointaudit.AllowPrivateNetworksForTest(false)
-	t.Cleanup(restoreAllow)
-	engine.ServeHTTP(blocked, request)
-	assert.Equal(t, http.StatusBadRequest, blocked.Code)
-	assert.NotContains(t, blocked.Body.String(), "sk-test-secret-value")
+	engine.ServeHTTP(local, request)
+	assert.Equal(t, http.StatusOK, local.Code)
+	assert.NotContains(t, local.Body.String(), "sk-test-secret-value")
 }
 
 func openEndpointAuditDB(t *testing.T) int {

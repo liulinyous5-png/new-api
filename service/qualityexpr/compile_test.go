@@ -96,6 +96,31 @@ func TestNotEmpty(t *testing.T) {
 	assert.True(t, passed)
 }
 
+func TestContains(t *testing.T) {
+	prog, err := Compile(`content?.text contains "opus"`)
+	require.NoError(t, err)
+
+	passed, err := prog.Run(map[string]any{"content": map[string]any{"text": "claude-opus-4-8"}})
+	require.NoError(t, err)
+	assert.True(t, passed)
+
+	passed, err = prog.Run(map[string]any{"content": map[string]any{"text": "claude-sonnet"}})
+	require.NoError(t, err)
+	assert.False(t, passed)
+
+	passed, err = prog.Run(map[string]any{})
+	require.NoError(t, err)
+	assert.False(t, passed)
+
+	listProg, err := Compile(`any(content ?? [], { .text contains "tool" })`)
+	require.NoError(t, err)
+	passed, err = listProg.Run(map[string]any{
+		"content": []any{map[string]any{"text": "clear_tool_uses"}},
+	})
+	require.NoError(t, err)
+	assert.True(t, passed)
+}
+
 func TestCompileRejectsEmptyAndNonBoolean(t *testing.T) {
 	_, err := Compile("   ")
 	require.Error(t, err)

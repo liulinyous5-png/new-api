@@ -23,6 +23,7 @@ import { cn } from '@/lib/utils'
 const labels: Record<string, string> = {
   passed: 'Passed',
   failed: 'Failed',
+  unknown: 'Unknown',
   error: 'Request error',
   running: 'Running',
 }
@@ -37,6 +38,8 @@ export function EndpointVerdict(props: { verdict: string }) {
         props.verdict === 'passed' &&
           'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
         props.verdict === 'failed' && 'bg-destructive/15 text-destructive',
+        props.verdict === 'unknown' &&
+          'bg-amber-500/15 text-amber-700 dark:text-amber-300',
         props.verdict === 'error' &&
           'bg-amber-500/15 text-amber-700 dark:text-amber-300',
         props.verdict === 'running' && 'bg-muted text-muted-foreground'

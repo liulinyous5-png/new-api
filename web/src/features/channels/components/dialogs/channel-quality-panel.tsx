@@ -17,11 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { Dialog } from '@/components/dialog'
+import { ErrorState } from '@/components/error-state'
+import { LoadingState } from '@/components/loading-state'
 import { Button } from '@/components/ui/button'
 import { Combobox } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
@@ -54,6 +56,7 @@ import {
   parseModelsList,
 } from '../../lib'
 import type { Channel } from '../../types'
+import { ChannelQualityResponse } from './channel-quality-response'
 import { ChannelQualityVerdictBadge } from './channel-quality-verdict'
 
 type ChannelQualityPanelProps = {
@@ -75,7 +78,8 @@ export function ChannelQualityPanel(props: ChannelQualityPanelProps) {
   const [model, setModel] = useState('')
   const [keyIndex, setKeyIndex] = useState('')
   const [page, setPage] = useState(1)
-  const [selectedRun, setSelectedRun] = useState<ChannelQualityRun | null>(null)
+  const [selectedRunSnapshot, setSelectedRun] =
+    useState<ChannelQualityRun | null>(null)
   const [suiteOpen, setSuiteOpen] = useState(false)
   const pageSize = 10
 
@@ -123,6 +127,18 @@ export function ChannelQualityPanel(props: ChannelQualityPanelProps) {
       query.state.data?.verdict === 'running' ? 1500 : false,
   })
 
+  const selectedRun = selectedRunSnapshot
+    ? (runsQuery.data?.items.find(
+        (item) => item.id === selectedRunSnapshot.id
+      ) ??
+      suiteRunQuery.data?.items.find(
+        (item) => item.id === selectedRunSnapshot.id
+      ) ??
+      (runQuery.data?.id === selectedRunSnapshot.id
+        ? runQuery.data
+        : selectedRunSnapshot))
+    : null
+
   useEffect(() => {
     setProbeId('')
     setKeyIndex('')
@@ -153,18 +169,20 @@ export function ChannelQualityPanel(props: ChannelQualityPanelProps) {
     onSuccess: async () => {
       toast.success(t('Quality audit started'))
       setPage(1)
-      await queryClient.invalidateQueries({
-        queryKey: channelsQueryKeys.qualityRun(channelId),
-      })
-      await queryClient.invalidateQueries({
-        queryKey: [...channelsQueryKeys.all, 'quality', 'runs', channelId],
-      })
-      await queryClient.invalidateQueries({
-        queryKey: channelsQueryKeys.qualityLatest(),
-      })
-      await queryClient.invalidateQueries({
-        queryKey: channelsQueryKeys.qualitySuiteRun(channelId),
-      })
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: channelsQueryKeys.qualityRun(channelId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: [...channelsQueryKeys.all, 'quality', 'runs', channelId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: channelsQueryKeys.qualityLatest(),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: channelsQueryKeys.qualitySuiteRun(channelId),
+        }),
+      ])
     },
   })
 
@@ -183,6 +201,50 @@ export function ChannelQualityPanel(props: ChannelQualityPanelProps) {
   const canAudit = (QUALITY_AUDIT_CHANNEL_TYPES as readonly number[]).includes(
     channel.type
   )
+
+  let historyContent: ReactNode = null
+  if (runsQuery.isPending || suiteRunQuery.isPending) {
+    historyContent = <LoadingState />
+  } else if (runsQuery.isError || suiteRunQuery.isError) {
+    historyContent = (
+      <ErrorState
+        onRetry={() => {
+          void Promise.all([runsQuery.refetch(), suiteRunQuery.refetch()])
+        }}
+      />
+    )
+  } else if (history.length === 0 && !suiteRun) {
+    historyContent = (
+      <p className='text-muted-foreground text-sm'>
+        {t('No quality audit yet')}
+      </p>
+    )
+  } else if (history.length > 0) {
+    historyContent = (
+      <div className='overflow-hidden rounded-lg border'>
+        {history.map((item) => (
+          <button
+            key={item.id}
+            type='button'
+            className='hover:bg-muted flex w-full items-center justify-between gap-3 border-b px-3 py-2 text-left last:border-b-0'
+            onClick={() => setSelectedRun(item)}
+          >
+            <span className='min-w-0'>
+              <span className='block truncate text-sm'>
+                {item.probe_name || t('Probe')}
+              </span>
+              <span className='text-muted-foreground block truncate text-xs'>
+                {item.requested_model || '-'}
+                {' · '}
+                {formatQualityTime(item.created_at)}
+              </span>
+            </span>
+            <ChannelQualityVerdictBadge verdict={item.verdict} />
+          </button>
+        ))}
+      </div>
+    )
+  }
 
   return (
     <div className='flex flex-col gap-4'>
@@ -232,6 +294,12 @@ export function ChannelQualityPanel(props: ChannelQualityPanelProps) {
               type='button'
               className='self-start'
               disabled={
+                probesQuery.isPending ||
+                probesQuery.isError ||
+                runQuery.isPending ||
+                runQuery.isError ||
+                suiteRunQuery.isPending ||
+                suiteRunQuery.isError ||
                 startAudit.isPending ||
                 run?.verdict === 'running' ||
                 suiteRun?.verdict === 'running'
@@ -283,34 +351,7 @@ export function ChannelQualityPanel(props: ChannelQualityPanelProps) {
             <ChannelQualityVerdictBadge verdict={suiteRun.verdict} />
           </button>
         ) : null}
-        {history.length === 0 && !suiteRun ? (
-          <p className='text-muted-foreground text-sm'>
-            {t('No quality audit yet')}
-          </p>
-        ) : history.length > 0 ? (
-          <div className='overflow-hidden rounded-lg border'>
-            {history.map((item) => (
-              <button
-                key={item.id}
-                type='button'
-                className='hover:bg-muted flex w-full items-center justify-between gap-3 border-b px-3 py-2 text-left last:border-b-0'
-                onClick={() => setSelectedRun(item)}
-              >
-                <span className='min-w-0'>
-                  <span className='block truncate text-sm'>
-                    {item.probe_name || t('Probe')}
-                  </span>
-                  <span className='text-muted-foreground block truncate text-xs'>
-                    {item.requested_model || '-'}
-                    {' · '}
-                    {formatQualityTime(item.created_at)}
-                  </span>
-                </span>
-                <ChannelQualityVerdictBadge verdict={item.verdict} />
-              </button>
-            ))}
-          </div>
-        ) : null}
+        {historyContent}
         {total > pageSize ? (
           <div className='flex items-center justify-end gap-2'>
             <Button
@@ -346,7 +387,9 @@ export function ChannelQualityPanel(props: ChannelQualityPanelProps) {
         contentClassName='sm:max-w-3xl'
         contentHeight='min(70dvh, 640px)'
       >
-        {selectedRun ? <SingleResult run={selectedRun} /> : null}
+        {selectedRun ? (
+          <SingleResult key={selectedRun.id} run={selectedRun} />
+        ) : null}
       </Dialog>
       <Dialog
         open={suiteOpen && suiteRun != null}
@@ -438,6 +481,7 @@ function SingleResult(props: { run: ChannelQualityRun | null }) {
           <JsonRow label={t('Usage')} value={run.usage} />
         ) : null}
       </div>
+      <ChannelQualityResponse run={run} />
     </div>
   )
 }
