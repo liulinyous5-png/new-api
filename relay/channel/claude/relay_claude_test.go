@@ -20,13 +20,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestHandleStreamResponseDataForwardsClaudeErrorEvent(t *testing.T) {
+func TestHandleStreamResponseDataPreservesClaudeErrorAfterMessageStart(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatClaude}
 	claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
+	require.NoError(t, helper.ClaudeData(c, dto.ClaudeResponse{Type: "message_start"}))
 	data := `{"type":"error","error":{"type":"invalid_request_error","message":"Provider returned no content"},"provider_meta":{"trace_id":"trace_123"}}`
 
 	err := HandleStreamResponseData(c, info, claudeInfo, data)

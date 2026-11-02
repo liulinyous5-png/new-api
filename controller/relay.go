@@ -393,6 +393,10 @@ func tryGroupFallbackAfterRetryExhausted(
 	if c == nil || relayInfo == nil || retryParam == nil || lastChannel == nil {
 		return false, nil
 	}
+	// Exhausting the attempt budget must not bypass the downstream stream boundary.
+	if common.GetContextKeyBool(c, constant.ContextKeyClaudeStreamStarted) {
+		return false, nil
+	}
 	if _, ok := c.Get("specific_channel_id"); ok {
 		return false, nil
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -193,6 +194,21 @@ func SetEventStreamHeaders(c *gin.Context) {
 	c.Writer = &streamResponseWriter{ResponseWriter: c.Writer}
 }
 
+// beginClaudeStreamEvent records commitment before writing: even a failed write
+// may have delivered part of the event. Stream callers serialize these writes.
+func beginClaudeStreamEvent(c *gin.Context, eventType string) bool {
+	if eventType == "error" {
+		if common.GetContextKeyBool(c, constant.ContextKeyClaudeStreamErrorSent) {
+			return false
+		}
+		common.SetContextKey(c, constant.ContextKeyClaudeStreamErrorSent, true)
+	}
+	if eventType != "" && eventType != "ping" {
+		common.SetContextKey(c, constant.ContextKeyClaudeStreamStarted, true)
+	}
+	return true
+}
+
 func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {
 	if requestContextDone(c) {
 		return nil
@@ -202,6 +218,9 @@ func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {
 	if err != nil {
 		common.SysError(common.LogText("error marshalling stream response: %s", err.Error()))
 	} else {
+		if !beginClaudeStreamEvent(c, resp.Type) {
+			return nil
+		}
 		c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
 		c.Render(-1, common.CustomEvent{Data: "data: " + string(jsonData)})
 	}
@@ -210,7 +229,7 @@ func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {
 }
 
 func ClaudeChunkData(c *gin.Context, resp dto.ClaudeResponse, data string) {
-	if requestContextDone(c) {
+	if requestContextDone(c) || !beginClaudeStreamEvent(c, resp.Type) {
 		return
 	}
 

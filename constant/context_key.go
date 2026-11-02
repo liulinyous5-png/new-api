@@ -76,6 +76,10 @@ const (
 	ContextKeyIsStream             ContextKey = "is_stream"
 	ContextKeyResponseStreamStatus ContextKey = "response_stream_status"
 
+	// Downstream Claude event state survives channel retries. Heartbeats do not start a message.
+	ContextKeyClaudeStreamStarted   ContextKey = "claude_stream_started"
+	ContextKeyClaudeStreamErrorSent ContextKey = "claude_stream_error_sent"
+
 	// ContextKeyAuditLogged marks that the current request has already recorded
 	// a manage/operation audit log inside the handler. When set, the admin-audit
 	// fallback in authHelper (finishAdminAudit) skips its record to avoid

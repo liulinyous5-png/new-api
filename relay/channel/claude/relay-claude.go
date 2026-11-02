@@ -94,7 +94,9 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		return types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
 	if claudeError := claudeResponse.GetClaudeError(); claudeError != nil && claudeError.Type != "" {
-		if info.RelayFormat == types.RelayFormatClaude {
+		// Before the first message event, leave errors to the retry controller.
+		// Once committed, preserve the upstream error and end this response.
+		if info.RelayFormat == types.RelayFormatClaude && common.GetContextKeyBool(c, constant.ContextKeyClaudeStreamStarted) {
 			helper.ClaudeChunkData(c, claudeResponse, data)
 		}
 		return types.WithClaudeError(*claudeError, http.StatusInternalServerError)
