@@ -702,7 +702,7 @@ export type ChannelQualityProbe = {
   headers: Record<string, string>
   body: string
   statuses: number[]
-  assertions: ChannelQualityAssertion[]
+  assertions: ChannelQualityAssertion[] | null
   created_at: number
   updated_at: number
 }
@@ -715,6 +715,12 @@ export type ChannelQualityAssertionResult = {
 }
 
 export type ChannelQualityRun = {
+  execution?: {
+    attempts: number
+    retry_limit: number
+    elapsed_ms: number
+    stop_reason?: string
+  } | null
   id: number
   channel_id: number
   key_index: number

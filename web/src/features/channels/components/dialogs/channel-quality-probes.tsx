@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { nanoid } from 'nanoid/non-secure'
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -92,7 +93,9 @@ export function ChannelQualityProbes(props: ChannelQualityProbesProps) {
     mutationFn: async (next: ProbeDraft) => {
       const headers = parseHeaderObject(next.headers)
       if (!headers) {
-        throw new Error(t('Header JSON must be an object'))
+        throw new Error(
+          t('Request headers must be a JSON object with string values.')
+        )
       }
       if (next.statuses.length === 0) {
         throw new Error(t('Add at least one response status'))
@@ -241,6 +244,7 @@ export function ChannelQualityProbes(props: ChannelQualityProbesProps) {
             </p>
           ) : null}
           <ProbeFields
+            key={draft.id}
             draft={draft}
             disabled={fieldsDisabled}
             statusInput={statusInput}
@@ -458,7 +462,9 @@ function draftFromProbe(probe: ChannelQualityProbe): ProbeDraft {
     headers: JSON.stringify(probe.headers ?? {}, null, 2),
     body: probe.body,
     statuses: probe.statuses?.length ? probe.statuses : [200],
-    assertions: probe.assertions.map((assertion) => draftAssertion(assertion)),
+    assertions: (probe.assertions ?? []).map((assertion) =>
+      draftAssertion(assertion)
+    ),
     builtin: probe.builtin,
   }
 }
@@ -469,7 +475,7 @@ function draftAssertion(assertion: {
 }): DraftAssertion {
   const parsed = parseQualityAssertion(assertion.expr)
   return {
-    key: newAssertionKey(),
+    key: nanoid(),
     name: assertion.name,
     model: parsed ? draftModel(parsed) : null,
     customExpr: parsed ? null : assertion.expr,
@@ -482,7 +488,7 @@ function draftModel(model: QualityAssertionModel): QualityAssertionDraftModel {
     listPath: model.listPath,
     conditions: model.conditions.map((condition) => ({
       ...condition,
-      key: newAssertionKey(),
+      key: nanoid(),
     })),
   }
 }
@@ -508,10 +514,6 @@ function blankAssertion(assertion: DraftAssertion): boolean {
   return assertion.model.conditions.every(
     (condition) => !condition.field.trim() && !condition.value.trim()
   )
-}
-
-function newAssertionKey(): string {
-  return globalThis.crypto.randomUUID()
 }
 
 function parseHeaderObject(raw: string): Record<string, string> | null {

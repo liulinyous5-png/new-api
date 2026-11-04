@@ -48,7 +48,7 @@ func DisableChannel(channelError types.ChannelError, reason string) {
 	}
 }
 
-func EnableChannel(channelId int, usingKey string, channelName string) {
+func EnableChannel(channelId int, usingKey string, channelName string) bool {
 	success := model.UpdateChannelStatus(channelId, usingKey, common.ChannelStatusEnabled, "")
 	if success {
 		params := map[string]any{"Name": channelName, "Id": channelId}
@@ -56,6 +56,7 @@ func EnableChannel(channelId int, usingKey string, channelName string) {
 			return i18n.Translate(lang, i18n.MsgChannelNotifyEnabledSubject, params), i18n.Translate(lang, i18n.MsgChannelNotifyEnabledContent, params)
 		})
 	}
+	return success
 }
 
 func ShouldDisableChannel(err *types.NewAPIError) bool {

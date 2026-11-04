@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
@@ -506,7 +505,12 @@ func qualityProbeView(probe *model.ChannelQualityProbe) (gin.H, error) {
 }
 
 func qualityRunView(run *model.ChannelQualityRun) gin.H {
+	var snapshot struct {
+		Execution *qualityExecution `json:"execution"`
+	}
+	_ = common.UnmarshalJsonStr(run.ProbeSnapshot, &snapshot)
 	return gin.H{
+		"execution":         snapshot.Execution,
 		"id":                run.Id,
 		"channel_id":        run.ChannelId,
 		"key_index":         run.KeyIndex,
@@ -631,6 +635,11 @@ type qualityAuditOutcome struct {
 }
 
 func auditAnthropicChannel(ctx context.Context, channel *model.Channel, probe *model.ChannelQualityProbe, selectedModel string, keyIndex *int) (qualityAuditOutcome, error) {
+	return auditAnthropicChannelWithRetry(ctx, channel, probe, selectedModel, keyIndex, nil)
+}
+
+// A non-nil retry limit is supplied only by scheduled quality scans.
+func auditAnthropicChannelWithRetry(ctx context.Context, channel *model.Channel, probe *model.ChannelQualityProbe, selectedModel string, keyIndex *int, retryLimit *int) (qualityAuditOutcome, error) {
 	outcome := qualityAuditOutcome{Verdict: model.ChannelQualityVerdictError}
 	headers, err := probe.HeaderMap()
 	if err != nil {
@@ -683,7 +692,7 @@ func auditAnthropicChannel(ctx context.Context, channel *model.Channel, probe *m
 
 	recorder := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(recorder)
-	callCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	callCtx, cancel := context.WithTimeout(ctx, qualityAuditTimeout)
 	defer cancel()
 	httpRequest := httptest.NewRequestWithContext(callCtx, http.MethodPost, "/v1/messages", nil)
 	httpRequest.Header.Set("Content-Type", "application/json")
@@ -729,40 +738,49 @@ func auditAnthropicChannel(ctx context.Context, channel *model.Channel, probe *m
 		outcome.Error = err.Error()
 		return outcome, nil
 	}
-	if channel.Type == constant.ChannelTypeAws {
-		awsAdaptor, ok := adaptor.(*aws.Adaptor)
-		if !ok {
-			outcome.Verdict = model.ChannelQualityVerdictUnsupported
-			outcome.Error = "this AWS channel mode cannot run a Messages probe"
-			return outcome, nil
+	send := func() qualityProbeResponse {
+		if channel.Type == constant.ChannelTypeAws {
+			awsAdaptor, ok := adaptor.(*aws.Adaptor)
+			if !ok {
+				return qualityProbeResponse{err: &aws.QualityUnsupportedError{}}
+			}
+			status, body, retryAfter, err := awsAdaptor.ExecuteQuality(ginCtx, info, payload, headers, retryLimit != nil)
+			return qualityProbeResponse{status: status, body: body, retryAfter: retryAfter, err: err}
 		}
-		status, respBody, err := awsAdaptor.ExecuteQuality(ginCtx, info, payload, headers)
+		resp, err := upstream.DoQualityRequest(adaptor, ginCtx, info, bytes.NewReader(payload), headers)
 		if err != nil {
-			if status > 0 {
-				outcome.Response = captureQualityResponse(status, respBody, true)
-			}
-			var unsupported *aws.QualityUnsupportedError
-			if errors.As(err, &unsupported) {
-				outcome.Verdict = model.ChannelQualityVerdictUnsupported
-			}
-			outcome.Error = err.Error()
-			return outcome, nil
+			return qualityProbeResponse{err: err}
 		}
-		return finishQualityResponse(outcome, statuses, assertions, status, respBody), nil
+		defer resp.Body.Close()
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxQualityResponseBytes+1))
+		return qualityProbeResponse{status: resp.StatusCode, body: body, retryAfter: resp.Header.Get("Retry-After"), err: err}
 	}
-	resp, err := upstream.DoQualityRequest(adaptor, ginCtx, info, bytes.NewReader(payload), headers)
-	if err != nil {
-		outcome.Error = err.Error()
+	var response qualityProbeResponse
+	if retryLimit == nil {
+		response = send()
+	} else {
+		var execution qualityExecution
+		response, execution = executeQualityRequests(callCtx, *retryLimit, statuses, send)
+		snapshot, err := common.Marshal(map[string]any{
+			"headers": headers, "statuses": statuses, "assertions": assertions, "execution": execution,
+		})
+		if err != nil {
+			return outcome, err
+		}
+		outcome.ProbeSnapshot = string(snapshot)
+	}
+	if response.err != nil {
+		if response.status > 0 {
+			outcome.Response = captureQualityResponse(response.status, response.body, true)
+		}
+		var unsupported *aws.QualityUnsupportedError
+		if errors.As(response.err, &unsupported) {
+			outcome.Verdict = model.ChannelQualityVerdictUnsupported
+		}
+		outcome.Error = response.err.Error()
 		return outcome, nil
 	}
-	defer resp.Body.Close()
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxQualityResponseBytes+1))
-	if err != nil {
-		outcome.Response = captureQualityResponse(resp.StatusCode, respBody, true)
-		outcome.Error = err.Error()
-		return outcome, nil
-	}
-	return finishQualityResponse(outcome, statuses, assertions, resp.StatusCode, respBody), nil
+	return finishQualityResponse(outcome, statuses, assertions, response.status, response.body), nil
 }
 
 func finishQualityResponse(outcome qualityAuditOutcome, statuses []int, assertions []model.ChannelQualityAssertion, status int, respBody []byte) qualityAuditOutcome {

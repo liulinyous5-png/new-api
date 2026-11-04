@@ -334,6 +334,21 @@ func runChannelQualityScan(ctx context.Context) (map[string]int, error) {
 			return summary, err
 		}
 		summary[verdict]++
+		disableAction := ""
+		if verdict == model.ChannelQualityVerdictFailed && model.CurrentRequestPolicy().Options[operation_setting.QualityDisableOnFailureOptionKey] == "true" {
+			changed, disableErr := model.DisableChannelForQualityAudit(channel.Id)
+			if disableErr != nil {
+				summary["disable_errors"]++
+				disableAction = "disable_failed"
+				common.SysError(common.LogText("quality audit channel disable failed: channel_id=%d, error=%v", channel.Id, disableErr))
+			} else if changed {
+				summary["disabled"]++
+				disableAction = "disabled"
+				service.CloseActiveWebSocketsForChannel(channel.Id, service.ChannelDisabledCloseReason)
+				// A new disable must not be hidden by an earlier failure-only alert.
+				service.ClearQualityWebhookCooldown(channel.Id, channel.QualitySuiteId)
+			}
+		}
 		if configErr == nil && webhookConfig.Enabled {
 			if verdict == model.ChannelQualityVerdictPassed {
 				service.ClearQualityWebhookCooldown(channel.Id, channel.QualitySuiteId)
@@ -344,6 +359,7 @@ func runChannelQualityScan(ctx context.Context) (map[string]int, error) {
 			}
 			if readErr == nil && run != nil {
 				if alert := service.BuildQualityWebhookAlert(channel, run, items); alert != nil {
+					alert.ChannelAction = disableAction
 					alerts = append(alerts, *alert)
 				}
 			}
@@ -471,7 +487,8 @@ func executeQualitySuiteItem(ctx context.Context, channel *model.Channel, item *
 		run.Error = "channel does not serve this model"
 		return run.Verdict, model.SaveChannelQualityRun(run)
 	}
-	outcome, err := auditAnthropicChannel(ctx, channel, probe, item.Model, nil)
+	retryLimit, _ := strconv.Atoi(model.CurrentRequestPolicy().Options[operation_setting.Quality429RetriesOptionKey])
+	outcome, err := auditAnthropicChannelWithRetry(ctx, channel, probe, item.Model, nil, &retryLimit)
 	applyQualityOutcome(run, outcome, err)
 	if saveErr := model.SaveChannelQualityResult(run, outcome.Response); saveErr != nil {
 		failQualityRun(run, model.ChannelQualityVerdictError, "failed to save quality audit response")

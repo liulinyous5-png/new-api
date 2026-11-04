@@ -142,6 +142,7 @@ export const STATIC_I18N_KEYS = [
   'Time functions use the timezone written in the expression.',
   'Request body must be a JSON object.',
   'Request headers must be a JSON object with string values.',
+  'Quality audit failed; manual recovery required',
   'Enter an ISO date and time with a timezone offset.',
   'Invalid expression syntax',
   'This expression cannot be simulated in the browser.',

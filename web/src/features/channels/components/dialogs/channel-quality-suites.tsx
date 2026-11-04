@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { nanoid } from 'nanoid/non-secure'
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -367,7 +368,7 @@ function emptySuite(): SuiteDraft {
 }
 
 function emptySuiteItem(): SuiteItemDraft {
-  return { key: crypto.randomUUID(), probeId: '', model: '' }
+  return { key: nanoid(), probeId: '', model: '' }
 }
 
 function draftFromSuite(suite: ChannelQualitySuite): SuiteDraft {
@@ -375,7 +376,7 @@ function draftFromSuite(suite: ChannelQualitySuite): SuiteDraft {
     id: suite.id,
     name: suite.name,
     items: suite.items.map((item) => ({
-      key: crypto.randomUUID(),
+      key: nanoid(),
       probeId: String(item.probe_id),
       model: item.model,
     })),

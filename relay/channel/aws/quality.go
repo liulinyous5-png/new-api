@@ -29,6 +29,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
@@ -94,55 +95,61 @@ func applyQualityProbeHeaders(header http.Header, headers map[string]string) {
 // ExecuteQuality sends one Messages probe. Mantle returns the HTTP status and
 // body. AKSK InvokeModel returns 200 and the Claude JSON body, or the SDK
 // status when Bedrock rejects the call.
-func (a *Adaptor) ExecuteQuality(c *gin.Context, info *relaycommon.RelayInfo, body []byte, probeHeaders map[string]string) (int, []byte, error) {
+func (a *Adaptor) ExecuteQuality(c *gin.Context, info *relaycommon.RelayInfo, body []byte, probeHeaders map[string]string, singleAttempt bool) (int, []byte, string, error) {
 	if info == nil {
-		return 0, nil, &QualityUnsupportedError{Reason: "this AWS channel mode cannot run a Messages probe"}
+		return 0, nil, "", &QualityUnsupportedError{Reason: "this AWS channel mode cannot run a Messages probe"}
 	}
 	if isNovaModel(getAwsModelID(info.UpstreamModelName)) {
-		return 0, nil, &QualityUnsupportedError{Reason: "Amazon Nova cannot run a Messages probe"}
+		return 0, nil, "", &QualityUnsupportedError{Reason: "Amazon Nova cannot run a Messages probe"}
 	}
 	c.Set(qualityProbeHeadersKey, probeHeaders)
 	switch info.ChannelOtherSettings.AwsApiType {
 	case dto.AwsApiTypeMantle:
 		req, err := a.newMantleRequest(c, info, bytes.NewReader(body))
 		if err != nil {
-			return 0, nil, err
+			return 0, nil, "", err
 		}
 		resp, err := channel.DoRequest(c, req, info)
 		if err != nil {
-			return 0, nil, err
+			return 0, nil, "", err
 		}
 		defer resp.Body.Close()
 		respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxQualityResponseBytes))
 		if err != nil {
-			return resp.StatusCode, respBody, err
+			return resp.StatusCode, respBody, resp.Header.Get("Retry-After"), err
 		}
-		return resp.StatusCode, respBody, nil
+		return resp.StatusCode, respBody, resp.Header.Get("Retry-After"), nil
 	case "", dto.AwsApiTypeInvokeModel:
 		if _, err := a.GetRequestURL(info); err != nil {
-			return 0, nil, err
+			return 0, nil, "", err
 		}
 		if a.ClientMode == ClientModeApiKey {
-			return 0, nil, &QualityUnsupportedError{Reason: "this AWS channel mode cannot run a Messages probe"}
+			return 0, nil, "", &QualityUnsupportedError{Reason: "this AWS channel mode cannot run a Messages probe"}
 		}
 		if _, err := doAwsClientRequest(c, info, a, bytes.NewReader(body)); err != nil {
-			return 0, nil, err
+			return 0, nil, "", err
 		}
 		ctx, cancel := newAwsInvokeContext(c.Request.Context())
 		defer cancel()
 		input, ok := a.AwsReq.(*bedrockruntime.InvokeModelInput)
 		if !ok || a.AwsClient == nil {
-			return 0, nil, errors.New("aws invoke request was not prepared")
+			return 0, nil, "", errors.New("aws invoke request was not prepared")
 		}
 		var status int
+		var retryAfter string
 		var rawBody []byte
 		var readErr error
 		// Capture before the SDK consumes/deserializes error responses. The
 		// audit retains at most the size limit plus one truncation sentinel.
 		awsResp, err := a.AwsClient.InvokeModel(ctx, input, func(options *bedrockruntime.Options) {
+			// Scheduled scans own the retry budget; never multiply it by SDK retries.
+			if singleAttempt {
+				options.Retryer = aws.NopRetryer{}
+			}
 			options.APIOptions = append(options.APIOptions, func(stack *middleware.Stack) error {
 				return stack.Deserialize.Insert(middleware.DeserializeMiddlewareFunc("QualityResponse", func(ctx context.Context, in middleware.DeserializeInput, next middleware.DeserializeHandler) (middleware.DeserializeOutput, middleware.Metadata, error) {
 					status, rawBody, readErr = 0, nil, nil
+					retryAfter = ""
 					out, metadata, err := next.HandleDeserialize(ctx, in)
 					if err != nil {
 						return out, metadata, err
@@ -152,6 +159,7 @@ func (a *Adaptor) ExecuteQuality(c *gin.Context, info *relaycommon.RelayInfo, bo
 						return out, metadata, nil
 					}
 					status = resp.StatusCode
+					retryAfter = resp.Header.Get("Retry-After")
 					rawBody, readErr = io.ReadAll(io.LimitReader(resp.Body, maxQualityResponseBytes))
 					_ = resp.Body.Close()
 					resp.Body = io.NopCloser(bytes.NewReader(rawBody))
@@ -160,22 +168,22 @@ func (a *Adaptor) ExecuteQuality(c *gin.Context, info *relaycommon.RelayInfo, bo
 			})
 		})
 		if readErr != nil {
-			return status, rawBody, readErr
+			return status, rawBody, retryAfter, readErr
 		}
 		if err != nil {
 			if c.Request.Context().Err() != nil {
-				return status, rawBody, c.Request.Context().Err()
+				return status, rawBody, retryAfter, c.Request.Context().Err()
 			}
 			if ctx.Err() != nil {
-				return status, rawBody, ctx.Err()
+				return status, rawBody, retryAfter, ctx.Err()
 			}
 			if status > 0 {
-				return status, rawBody, nil
+				return status, rawBody, retryAfter, nil
 			}
-			return 0, nil, err
+			return 0, nil, "", err
 		}
-		return http.StatusOK, awsResp.Body[:min(len(awsResp.Body), maxQualityResponseBytes)], nil
+		return http.StatusOK, awsResp.Body[:min(len(awsResp.Body), maxQualityResponseBytes)], retryAfter, nil
 	default:
-		return 0, nil, &QualityUnsupportedError{Reason: "this AWS channel mode cannot run a Messages probe"}
+		return 0, nil, "", &QualityUnsupportedError{Reason: "this AWS channel mode cannot run a Messages probe"}
 	}
 }

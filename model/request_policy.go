@@ -69,6 +69,8 @@ func IsRequestPolicyOption(key string) bool {
 		return true
 	}
 	switch key {
+	case operation_setting.QualityDisableOnFailureOptionKey, operation_setting.Quality429RetriesOptionKey:
+		return true
 	case "CheckSensitiveEnabled", "CheckSensitiveOnPromptEnabled", "SensitiveWords", "AutomaticEnableChannelEnabled", "ChannelDisableThreshold", "monitor_setting.auto_test_channel_enabled", "monitor_setting.auto_test_channel_minutes", "monitor_setting.channel_test_concurrency", "monitor_setting.channel_test_mode", "monitor_setting.auto_quality_enabled", "monitor_setting.auto_quality_minutes", "RetryTimes", "AutomaticRetryStatusCodes", "AutomaticDisableChannelEnabled", "AutomaticDisableStatusCodes", "AutomaticDisableKeywords":
 		return true
 	}
@@ -143,7 +145,7 @@ func BuildRequestPolicy(options map[string]string) (*RequestPolicySnapshot, erro
 		return nil, err
 	}
 	snapshot.DisableKeywords = strings.Split(raw["AutomaticDisableKeywords"], "\n")
-	for _, key := range []string{"CheckSensitiveEnabled", "CheckSensitiveOnPromptEnabled", "AutomaticEnableChannelEnabled", "monitor_setting.auto_test_channel_enabled", "monitor_setting.auto_quality_enabled"} {
+	for _, key := range []string{"CheckSensitiveEnabled", "CheckSensitiveOnPromptEnabled", "AutomaticEnableChannelEnabled", "monitor_setting.auto_test_channel_enabled", "monitor_setting.auto_quality_enabled", operation_setting.QualityDisableOnFailureOptionKey} {
 		if _, err := strconv.ParseBool(raw[key]); err != nil {
 			return nil, fmt.Errorf("invalid boolean: %s", key)
 		}
@@ -158,6 +160,9 @@ func BuildRequestPolicy(options map[string]string) (*RequestPolicySnapshot, erro
 		return nil, err
 	}
 	if err := operation_setting.ValidateAutoQualityMinutes(raw["monitor_setting.auto_quality_minutes"]); err != nil {
+		return nil, err
+	}
+	if err := operation_setting.ValidateQuality429Retries(raw[operation_setting.Quality429RetriesOptionKey]); err != nil {
 		return nil, err
 	}
 	for _, key := range []string{"ChannelDisableThreshold", "monitor_setting.auto_test_channel_minutes"} {

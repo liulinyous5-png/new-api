@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   cleanup,
+  fireEvent,
   render,
   screen,
   within,
@@ -31,6 +32,7 @@ import { api } from '@/lib/api'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
+import { SettingsPageProvider } from '../../components/settings-page-context'
 import { ChannelHealthSection } from '../channel-health-section'
 import { defaultRequestPolicySettings } from '../defaults'
 
@@ -122,19 +124,17 @@ it('opens Webhook settings under scheduled quality scan and saves independently'
       user: { id: 1, username: 'root', role: ROLE.SUPER_ADMIN },
     },
   })
-  const get = vi
-    .spyOn(api, 'get')
-    .mockResolvedValue({
+  const get = vi.spyOn(api, 'get').mockResolvedValue({
+    data: {
+      success: true,
       data: {
-        success: true,
-        data: {
-          enabled: true,
-          url: 'https://example.com/quality',
-          cooldown_seconds: 600,
-          secret_configured: false,
-        },
+        enabled: true,
+        url: 'https://example.com/quality',
+        cooldown_seconds: 600,
+        secret_configured: false,
       },
-    })
+    },
+  })
   const put = vi
     .spyOn(api, 'put')
     .mockResolvedValue({ data: { success: true } })
@@ -162,4 +162,98 @@ it('opens Webhook settings under scheduled quality scan and saves independently'
     })
   )
   expect(patch).not.toHaveBeenCalled()
+})
+
+it('keeps quality auto-disable off by default and saves it independently of alerts and general disable rules', async () => {
+  const user = userEvent.setup()
+  const actionsContainer = document.createElement('div')
+  render(<div />).container.appendChild(actionsContainer)
+  const patch = vi
+    .spyOn(api, 'patch')
+    .mockResolvedValue({ data: { success: true, data: { options: {} } } })
+  const put = vi.spyOn(api, 'put')
+  render(
+    <QueryClientProvider client={client}>
+      <SettingsPageProvider actionsContainer={actionsContainer}>
+        <ChannelHealthSection defaultValues={defaultRequestPolicySettings} />
+      </SettingsPageProvider>
+    </QueryClientProvider>
+  )
+  const scan = screen.getByRole('group', { name: 'Scheduled quality scan' })
+  const toggle = within(scan).getByRole('switch', {
+    name: 'Disable on quality failure',
+  })
+  expect(toggle).not.toBeChecked()
+  await user.click(toggle)
+  expect(toggle).toBeChecked()
+  expect(
+    screen.getByRole('switch', { name: 'Disable on failure' })
+  ).not.toBeChecked()
+  expect(
+    screen.getByText(
+      'Scheduled quality scans can disable channels independently of the general auto-disable rules.'
+    )
+  ).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() =>
+    expect(patch).toHaveBeenCalledWith('/api/option/request_policy', {
+      options: { 'monitor_setting.quality_disable_on_failure': 'true' },
+    })
+  )
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Save Changes' })).toBeEnabled()
+  )
+  await user.click(toggle)
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() =>
+    expect(patch).toHaveBeenLastCalledWith('/api/option/request_policy', {
+      options: { 'monitor_setting.quality_disable_on_failure': 'false' },
+    })
+  )
+  expect(put).not.toHaveBeenCalled()
+})
+
+it('defaults 429 retries to zero, rejects invalid counts and saves the allowed maximum', async () => {
+  const user = userEvent.setup()
+  const actionsContainer = document.createElement('div')
+  render(<div />).container.appendChild(actionsContainer)
+  const patch = vi.spyOn(api, 'patch').mockResolvedValue({
+    data: { success: true, data: { options: {} } },
+  })
+  render(
+    <QueryClientProvider client={client}>
+      <SettingsPageProvider actionsContainer={actionsContainer}>
+        <ChannelHealthSection defaultValues={defaultRequestPolicySettings} />
+      </SettingsPageProvider>
+    </QueryClientProvider>
+  )
+  const scan = screen.getByRole('group', { name: 'Scheduled quality scan' })
+  const count = within(scan).getByRole('spinbutton', {
+    name: '429 retry count',
+  })
+  expect(count).toHaveValue(0)
+  expect(count).toHaveAttribute('min', '0')
+  expect(count).toHaveAttribute('max', '10')
+  const form = count.closest('form')
+  if (!form) throw new Error('Settings form not found')
+  for (const value of ['-1', '11', '1.5']) {
+    fireEvent.change(count, { target: { value } })
+    fireEvent.submit(form)
+    expect(
+      await screen.findByText(
+        'quality 429 retries must be an integer between 0 and 10'
+      )
+    ).toBeVisible()
+    expect(patch).not.toHaveBeenCalled()
+  }
+  fireEvent.change(count, { target: { value: '10' } })
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() =>
+    expect(patch).toHaveBeenCalledWith('/api/option/request_policy', {
+      options: { 'monitor_setting.quality_429_retries': '10' },
+    })
+  )
+  expect(
+    within(scan).getByRole('switch', { name: 'Disable on quality failure' })
+  ).not.toBeChecked()
 })

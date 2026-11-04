@@ -28,11 +28,13 @@ import { Button } from '@/components/ui/button'
 import { Combobox } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { toIntlLocale } from '@/i18n/languages'
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
   hasPermission,
 } from '@/lib/admin-permissions'
+import { formatNumber } from '@/lib/format'
 import {
   requireServerSuccess,
   translateServerText,
@@ -427,7 +429,8 @@ function suiteRunData(
 }
 
 function SingleResult(props: { run: ChannelQualityRun | null }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const run = props.run
   if (!run) return null
   return (
@@ -445,6 +448,41 @@ function SingleResult(props: { run: ChannelQualityRun | null }) {
             value={run.upstream_model || '-'}
           />
         </dl>
+        {run.execution ? (
+          <div className='space-y-2 border-t p-3 text-sm'>
+            <dl className='grid gap-3 sm:grid-cols-3'>
+              <ResultRow
+                label={t('Actual retries')}
+                value={formatNumber(
+                  Math.max(0, run.execution.attempts - 1),
+                  locale
+                )}
+              />
+              <ResultRow
+                label={t('429 retry count')}
+                value={formatNumber(run.execution.retry_limit, locale)}
+              />
+              <ResultRow
+                label={t('Elapsed time (ms)')}
+                value={formatNumber(run.execution.elapsed_ms, locale)}
+              />
+            </dl>
+            {run.execution.stop_reason === 'retry_limit' ? (
+              <p className='text-muted-foreground'>
+                {t(
+                  'Rate limited; retry limit reached. No failure action was triggered by this result.'
+                )}
+              </p>
+            ) : null}
+            {run.execution.stop_reason === 'time_budget' ? (
+              <p className='text-muted-foreground'>
+                {t(
+                  'Rate limited; the next retry would exceed the time budget. No failure action was triggered by this result.'
+                )}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
         {run.error ? (
           <p className='text-destructive border-t px-3 py-2 text-sm'>
             {translateServerText(t, run.error)}

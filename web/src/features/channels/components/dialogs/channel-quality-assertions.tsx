@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Pencil, Plus, Trash2 } from 'lucide-react'
+import { nanoid } from 'nanoid/non-secure'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -294,14 +295,14 @@ function summaryLines(
 
 function emptyAssertion(): QualityDraftAssertion {
   return {
-    key: newAssertionKey(),
+    key: nanoid(),
     name: '',
     model: {
       mode: 'any',
       listPath: '',
       conditions: [
         {
-          key: newAssertionKey(),
+          key: nanoid(),
           field: '',
           op: 'eq',
           kind: 'text',
@@ -327,8 +328,4 @@ function copyAssertion(
         }
       : null,
   }
-}
-
-function newAssertionKey(): string {
-  return globalThis.crypto.randomUUID()
 }

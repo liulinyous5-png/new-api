@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Code, Plus, Table, Trash2 } from 'lucide-react'
+import { nanoid } from 'nanoid/non-secure'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -79,7 +80,9 @@ export function ChannelQualityHeaders(props: ChannelQualityHeadersProps) {
     }
     const parsed = headerRows(jsonValue)
     if (!parsed) {
-      setJsonError(t('Header JSON must be an object'))
+      setJsonError(
+        t('Request headers must be a JSON object with string values.')
+      )
       return
     }
     setRows(parsed)
@@ -164,7 +167,7 @@ export function ChannelQualityHeaders(props: ChannelQualityHeadersProps) {
             variant='outline'
             size='sm'
             onClick={() =>
-              emitRows([...rows, { key: newHeaderKey(), name: '', value: '' }])
+              emitRows([...rows, { key: nanoid(), name: '', value: '' }])
             }
           >
             <Plus className='size-4' aria-hidden='true' />
@@ -186,7 +189,9 @@ export function ChannelQualityHeaders(props: ChannelQualityHeadersProps) {
             props.onChange(value)
             const parsed = headerRows(value)
             if (!parsed) {
-              setJsonError(t('Header JSON must be an object'))
+              setJsonError(
+                t('Request headers must be a JSON object with string values.')
+              )
               return
             }
             setRows(parsed)
@@ -211,7 +216,7 @@ function headerRows(raw: string): HeaderRow[] | null {
   const rows: HeaderRow[] = []
   for (const [name, item] of Object.entries(value)) {
     if (typeof item !== 'string') return null
-    rows.push({ key: newHeaderKey(), name, value: item })
+    rows.push({ key: nanoid(), name, value: item })
   }
   return rows
 }
@@ -224,8 +229,4 @@ function rowsToHeaders(rows: HeaderRow[]): Record<string, string> {
     headers[name] = row.value
   }
   return headers
-}
-
-function newHeaderKey(): string {
-  return globalThis.crypto.randomUUID()
 }

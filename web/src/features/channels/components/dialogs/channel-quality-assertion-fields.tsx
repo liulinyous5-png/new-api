@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
+import { nanoid } from 'nanoid/non-secure'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -275,7 +276,7 @@ export function ChannelQualityAssertionFields(
               ...model,
               conditions: [
                 ...model.conditions,
-                { ...emptyQualityCondition(), key: crypto.randomUUID() },
+                { ...emptyQualityCondition(), key: nanoid() },
               ],
             })
           }

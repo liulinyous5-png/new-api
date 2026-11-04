@@ -1,5 +1,6 @@
 {
   "quality audit webhook delivery failed": "质量审计 Webhook 告警发送失败",
+  "quality audit channel disable failed: channel_id=%d, error=%v": "质量审计渠道禁用失败：渠道 ID=%d，错误=%v",
   "%d quota points": "%d 点额度",
   "%s after refresh: %s": "%s（刷新凭证后重试）: %s",
   "%s failed: %s": "%s 构建失败，%s",

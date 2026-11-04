@@ -15,6 +15,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -23,6 +25,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/qualityexpr"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 
 	"github.com/gin-gonic/gin"
@@ -390,6 +393,280 @@ func TestQualitySchedulePersistsDisabledSwitch(t *testing.T) {
 	require.NoError(t, db.First(saved, channel.Id).Error)
 	assert.False(t, saved.QualityAutoEnabled)
 	assert.Equal(t, 0, saved.QualitySuiteId)
+}
+
+func TestQualityAutoDisableDatabaseMatrix(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	service.InitHttpClient()
+	fetch := system_setting.GetFetchSetting()
+	previousProtection := fetch.EnableSSRFProtection
+	fetch.EnableSSRFProtection = false
+	t.Cleanup(func() { fetch.EnableSSRFProtection = previousProtection })
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			dsn := os.Getenv("AUDIT_" + strings.ToUpper(dialect) + "_DSN")
+			if dialect != "sqlite" && dsn == "" {
+				t.Skip("database DSN not configured")
+			}
+			db, _ := newAuditTestDatabase(t, dialect, dsn)
+			kind := common.DatabaseType(dialect)
+			if dialect == "postgres" {
+				kind = common.DatabaseTypePostgreSQL
+			}
+			useLogExportDatabases(t, db, db, kind, kind)
+			require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.Option{}, &model.ChannelQualityProbe{}, &model.ChannelQualityRun{}, &model.ChannelQualityResponse{}, &model.ChannelQualitySuite{}, &model.ChannelQualitySuiteItem{}, &model.ChannelQualitySuiteRun{}))
+			versionQuery := "SELECT version()"
+			if dialect == "sqlite" {
+				versionQuery = "SELECT sqlite_version()"
+			}
+			var version string
+			require.NoError(t, db.Raw(versionQuery).Scan(&version).Error)
+			t.Logf("database version: %s", version)
+
+			optionKey := operation_setting.QualityDisableOnFailureOptionKey
+			retryKey := operation_setting.Quality429RetriesOptionKey
+			common.OptionMapRWMutex.Lock()
+			previousOptions := common.OptionMap
+			common.OptionMap = make(map[string]string)
+			common.OptionMapRWMutex.Unlock()
+			t.Cleanup(func() {
+				common.OptionMapRWMutex.Lock()
+				common.OptionMap = previousOptions
+				common.OptionMapRWMutex.Unlock()
+			})
+			defaults, err := model.BuildRequestPolicy(nil)
+			require.NoError(t, err)
+			assert.Equal(t, "false", defaults.Options[optionKey])
+			assert.Equal(t, "0", defaults.Options[retryKey])
+			for _, invalid := range []string{"-1", "11", "1.5", "invalid"} {
+				_, err := model.BuildRequestPolicy(map[string]string{retryKey: invalid})
+				require.Error(t, err)
+			}
+			_, err = model.BuildRequestPolicy(map[string]string{retryKey: "10"})
+			require.NoError(t, err)
+			previousRetries := model.CurrentRequestPolicy().Options[retryKey]
+			t.Cleanup(func() {
+				require.NoError(t, model.UpdateRequestPolicyOptions(map[string]string{retryKey: previousRetries}))
+			})
+			require.NoError(t, model.UpdateRequestPolicyOptions(map[string]string{retryKey: "0"}))
+			previousValue := model.CurrentRequestPolicy().Options[optionKey]
+			t.Cleanup(func() {
+				require.NoError(t, model.UpdateRequestPolicyOptions(map[string]string{optionKey: previousValue}))
+			})
+			require.NoError(t, model.UpdateRequestPolicyOptions(map[string]string{optionKey: "false"}))
+			require.Error(t, model.UpdateRequestPolicyOptions(map[string]string{optionKey: "invalid"}))
+			previousWebhook := common.OptionMap[service.QualityWebhookOptionKey]
+			t.Cleanup(func() {
+				common.OptionMapRWMutex.Lock()
+				common.OptionMap[service.QualityWebhookOptionKey] = previousWebhook
+				common.OptionMapRWMutex.Unlock()
+			})
+			type notice struct {
+				status  int
+				enabled bool
+				body    string
+			}
+			notices := make(chan notice, 10)
+			var channelID int
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/notify" {
+					body, readErr := io.ReadAll(r.Body)
+					assert.NoError(t, readErr)
+					var stored model.Channel
+					var ability model.Ability
+					assert.NoError(t, db.First(&stored, channelID).Error)
+					assert.NoError(t, db.Where("channel_id = ?", channelID).First(&ability).Error)
+					notices <- notice{stored.Status, ability.Enabled, string(body)}
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+				if strings.HasPrefix(r.URL.Path, "/unavailable/") {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			t.Cleanup(server.Close)
+			probe := &model.ChannelQualityProbe{Name: "quality-failure", Headers: `{}`, Body: `{"model":"{{model}}"}`, Assertions: `[{"name":"present","expr":"notEmpty(missing)"}]`}
+			require.NoError(t, db.Create(probe).Error)
+			suite := &model.ChannelQualitySuite{Name: "quality-suite"}
+			require.NoError(t, model.SaveChannelQualitySuite(suite, []*model.ChannelQualitySuiteItem{{ProbeId: probe.Id, Model: "claude-sonnet"}}))
+			baseURL := server.URL
+			channel := &model.Channel{Type: constant.ChannelTypeAnthropic, Key: "key-a\nkey-b", Name: "quality-channel", Status: common.ChannelStatusEnabled, BaseURL: &baseURL, Models: "claude-sonnet", Group: "default", QualityAutoEnabled: true, QualitySuiteId: suite.Id, OtherInfo: `{"kept":"value"}`, ChannelInfo: model.ChannelInfo{IsMultiKey: true, MultiKeySize: 2, MultiKeyMode: constant.MultiKeyModePolling}}
+			require.NoError(t, db.Create(channel).Error)
+			channelID = channel.Id
+			require.NoError(t, db.Create(&model.Ability{ChannelId: channel.Id, Group: "default", Model: "claude-sonnet", Enabled: true}).Error)
+			cfg := service.QualityWebhookConfig{Enabled: true, URL: server.URL + "/notify", CooldownSeconds: 600}
+			require.NoError(t, service.SaveQualityWebhookConfig(cfg))
+			service.ClearQualityWebhookCooldown(channel.Id, suite.Id)
+			t.Cleanup(func() { service.ClearQualityWebhookCooldown(channel.Id, suite.Id) })
+			summary, err := runChannelQualityScan(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, 1, summary["failed"])
+			require.Len(t, notices, 1)
+			first := <-notices
+			assert.Equal(t, common.ChannelStatusEnabled, first.status)
+			assert.True(t, first.enabled)
+			assert.NotContains(t, first.body, `"channel_action":"disabled"`)
+
+			require.NoError(t, model.UpdateRequestPolicyOptions(map[string]string{optionKey: "true"}))
+			var option model.Option
+			require.NoError(t, db.Where(&model.Option{Key: optionKey}).First(&option).Error)
+			assert.Equal(t, "true", option.Value)
+			// Manual probes remain diagnostic even with the scheduled-disable switch on.
+			manualRun := &model.ChannelQualityRun{ChannelId: channel.Id, ProbeId: probe.Id, ProbeName: probe.Name, Verdict: model.ChannelQualityVerdictRunning}
+			require.NoError(t, model.CreateChannelQualityRun(manualRun))
+			view, err := executeChannelQualityTask(context.Background(), channelQualityTaskPayload{RunID: manualRun.Id, ChannelID: channel.Id, ProbeID: probe.Id, Model: "claude-sonnet"})
+			require.NoError(t, err)
+			assert.Equal(t, model.ChannelQualityVerdictFailed, view["verdict"])
+			var stored model.Channel
+			require.NoError(t, db.First(&stored, channel.Id).Error)
+			assert.Equal(t, common.ChannelStatusEnabled, stored.Status)
+			assert.Empty(t, notices)
+
+			common.MemoryCacheEnabled = true
+			model.InitChannelCache()
+			summary, err = runChannelQualityScan(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, 1, summary["disabled"])
+			assert.Equal(t, 1, summary["webhook_delivered"], "a disable must bypass the earlier failure-only cooldown")
+			require.Len(t, notices, 1)
+			disabled := <-notices
+			assert.Equal(t, common.ChannelStatusAutoDisabled, disabled.status)
+			assert.False(t, disabled.enabled)
+			assert.Contains(t, disabled.body, `"channel_action":"disabled"`)
+			require.NoError(t, db.First(&stored, channel.Id).Error)
+			assert.Equal(t, "value", stored.GetOtherInfo()["kept"])
+			assert.Equal(t, model.ChannelStatusReasonQualityFailed, stored.GetOtherInfo()["status_reason"])
+			assert.Empty(t, stored.ChannelInfo.MultiKeyStatusList, "disable the whole channel, not one credential")
+			cached, err := model.CacheGetChannel(channel.Id)
+			require.NoError(t, err)
+			assert.Equal(t, common.ChannelStatusAutoDisabled, cached.Status)
+			assert.False(t, service.EnableChannel(channel.Id, "key-a", channel.Name), "ordinary health recovery must not undo quality disabling")
+			changed, err := model.DisableChannelForQualityAudit(channel.Id)
+			require.NoError(t, err)
+			assert.False(t, changed)
+			summary, err = runChannelQualityScan(context.Background())
+			require.NoError(t, err)
+			assert.Zero(t, summary["channels"])
+			assert.Empty(t, notices)
+
+			// Manual recovery is permitted; alert configuration does not control disabling.
+			require.True(t, model.UpdateChannelStatus(channel.Id, "", common.ChannelStatusEnabled, "manual operation"))
+			cfg.Enabled = false
+			require.NoError(t, service.SaveQualityWebhookConfig(cfg))
+			require.NoError(t, db.Model(probe).Updates(map[string]any{"statuses": "[429]", "assertions": "[]"}).Error)
+			summary, err = runChannelQualityScan(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, 1, summary["disabled"], "HTTP status failures also disable")
+			assert.Empty(t, notices)
+
+			// A failed routing update must roll back both persistence and the cache.
+			require.True(t, model.UpdateChannelStatus(channel.Id, "", common.ChannelStatusEnabled, "manual operation"))
+			cfg.Enabled = true
+			require.NoError(t, service.SaveQualityWebhookConfig(cfg))
+			service.ClearQualityWebhookCooldown(channel.Id, suite.Id)
+			require.NoError(t, db.Callback().Update().Before("gorm:update").Register("quality_disable_failure", func(tx *gorm.DB) {
+				if tx.Statement.Table == "abilities" {
+					_ = tx.AddError(errors.New("routing unavailable"))
+				}
+			}))
+			summary, err = runChannelQualityScan(context.Background())
+			require.NoError(t, db.Callback().Update().Remove("quality_disable_failure"))
+			require.NoError(t, err)
+			assert.Equal(t, 1, summary["disable_errors"])
+			assert.Zero(t, summary["disabled"])
+			require.Len(t, notices, 1)
+			failure := <-notices
+			assert.Equal(t, common.ChannelStatusEnabled, failure.status)
+			assert.True(t, failure.enabled)
+			assert.Contains(t, failure.body, `"channel_action":"disable_failed"`)
+			assert.NotContains(t, failure.body, "routing unavailable")
+			cached, err = model.CacheGetChannel(channel.Id)
+			require.NoError(t, err)
+			assert.Equal(t, common.ChannelStatusEnabled, cached.Status)
+			// Passing, skipped, unknown and execution-error outcomes do not disable.
+			for _, outcome := range []struct{ name, body, assertions, modelName, verdict string }{
+				{"passed", `{"model":"{{model}}"}`, `[]`, "claude-sonnet", model.ChannelQualityVerdictPassed},
+				{"skipped", `{"model":"{{model}}"}`, `[]`, "another-model", model.ChannelQualityVerdictSkipped},
+				{"unknown", `{"model":"{{model}}"}`, `[]`, "claude-sonnet", model.ChannelQualityVerdictUnknown},
+				{"error", `invalid-json`, `[]`, "claude-sonnet", model.ChannelQualityVerdictError},
+			} {
+				baseURL := server.URL
+				if outcome.name == "unknown" {
+					baseURL += "/unavailable"
+				}
+				require.NoError(t, db.Model(channel).Update("base_url", baseURL).Error)
+				require.NoError(t, db.Model(probe).Updates(map[string]any{"statuses": "[200]", "body": outcome.body, "assertions": outcome.assertions}).Error)
+				require.NoError(t, db.Model(&model.ChannelQualitySuiteItem{}).Where("suite_id = ?", suite.Id).Update("model", outcome.modelName).Error)
+				summary, err = runChannelQualityScan(context.Background())
+				require.NoError(t, err)
+				assert.Equal(t, 1, summary[outcome.verdict], outcome.name)
+				assert.Zero(t, summary["disabled"], outcome.name)
+				require.NoError(t, db.First(&stored, channel.Id).Error)
+				assert.Equal(t, common.ChannelStatusEnabled, stored.Status, outcome.name)
+				assert.Empty(t, notices, outcome.name)
+			}
+			// Rate limiting retries persist one final record without disabling or alerting.
+			require.NoError(t, model.UpdateRequestPolicyOptions(map[string]string{retryKey: "1"}))
+			var retryOption model.Option
+			require.NoError(t, db.Where(&model.Option{Key: retryKey}).First(&retryOption).Error)
+			assert.Equal(t, "1", retryOption.Value)
+			require.NoError(t, db.Model(channel).Update("base_url", "https://quality.example").Error)
+			require.NoError(t, db.Model(probe).Updates(map[string]any{"body": `{"model":"{{model}}"}`, "statuses": "[200]", "assertions": "[]"}).Error)
+			client, err := service.GetHttpClientWithProxy("")
+			require.NoError(t, err)
+			previousTransport := client.Transport
+			t.Cleanup(func() { client.Transport = previousTransport })
+			requests := 0
+			var selectedKey string
+			client.Transport = qualityHTTPTransport(func(r *http.Request) (*http.Response, error) {
+				requests++
+				if requests == 1 {
+					selectedKey = r.Header.Get("x-api-key")
+				} else {
+					assert.Equal(t, selectedKey, r.Header.Get("x-api-key"))
+				}
+				return &http.Response{StatusCode: 429, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)), Request: r}, nil
+			})
+			summary, err = runChannelQualityScan(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, 2, requests)
+			assert.Equal(t, 1, summary["unknown"])
+			assert.Zero(t, summary["disabled"])
+			assert.Empty(t, notices)
+			require.NoError(t, db.First(&stored, channel.Id).Error)
+			assert.Equal(t, common.ChannelStatusEnabled, stored.Status)
+			_, runs, err := model.GetLatestChannelQualitySuiteRun(channel.Id)
+			require.NoError(t, err)
+			require.Len(t, runs, 1)
+			execution := qualityRunView(runs[0])["execution"].(*qualityExecution)
+			require.NotNil(t, execution)
+			assert.Equal(t, 2, execution.Attempts)
+			assert.Equal(t, 1, execution.RetryLimit)
+			assert.Equal(t, "retry_limit", execution.StopReason)
+			var response model.ChannelQualityResponse
+			require.NoError(t, db.Where("run_id = ?", runs[0].Id).First(&response).Error)
+			assert.Equal(t, 429, response.StatusCode)
+			assert.JSONEq(t, `{"error":"rate limited"}`, string(response.Body))
+			// A configured scan retry must not leak into the manual entry point.
+			requests = 0
+			_, err = executeChannelQualityTask(context.Background(), channelQualityTaskPayload{ChannelID: channel.Id, ProbeID: probe.Id, Model: "claude-sonnet"})
+			require.NoError(t, err)
+			assert.Equal(t, 1, requests)
+			client.Transport = previousTransport
+			// A concurrent manual disable must retain its status and reason.
+			require.True(t, model.UpdateChannelStatus(channel.Id, "", common.ChannelStatusManuallyDisabled, "manual operation"))
+			changed, err = model.DisableChannelForQualityAudit(channel.Id)
+			require.NoError(t, err)
+			assert.False(t, changed)
+			require.NoError(t, db.First(&stored, channel.Id).Error)
+			assert.Equal(t, common.ChannelStatusManuallyDisabled, stored.Status)
+			assert.Equal(t, "manual operation", stored.GetOtherInfo()["status_reason"])
+			common.MemoryCacheEnabled = false
+		})
+	}
 }
 
 func TestQualitySuiteDeleteGuards(t *testing.T) {
@@ -1214,4 +1491,184 @@ func TestQualityWebhookCardKeepsEachChannelAndItsProbesTogether(t *testing.T) {
 	}
 	require.NoError(t, common.Unmarshal(body, &generic))
 	assert.Equal(t, alerts, generic.Values)
+}
+
+type qualityTrackedBody struct {
+	io.Reader
+	closed bool
+}
+
+func (body *qualityTrackedBody) Close() error {
+	body.closed = true
+	return nil
+}
+
+func TestScheduledQuality429Retries(t *testing.T) {
+	for _, provider := range []string{"anthropic", "mantle", "invoke"} {
+		for _, tc := range []struct {
+			name        string
+			retries     int
+			statuses    []int
+			expected    string
+			wantCalls   int
+			wantVerdict string
+		}{
+			{"recover", 2, []int{429, 429, 200}, "[200]", 3, model.ChannelQualityVerdictPassed},
+			{"assertion failure after retry", 2, []int{429, 200}, "[200]", 2, model.ChannelQualityVerdictFailed},
+			{"exhausted", 2, []int{429}, "[200]", 3, model.ChannelQualityVerdictUnknown},
+			{"disabled", 0, []int{429}, "[200]", 1, model.ChannelQualityVerdictUnknown},
+			{"expected 429", 2, []int{429}, "[429]", 1, model.ChannelQualityVerdictPassed},
+		} {
+			t.Run(provider+"/"+tc.name, func(t *testing.T) {
+				client, err := service.GetHttpClientWithProxy("")
+				require.NoError(t, err)
+				previous := client.Transport
+				t.Cleanup(func() { client.Transport = previous })
+				synctest.Test(t, func(t *testing.T) {
+					calls := 0
+					var firstBody, firstKey string
+					var lastBody *qualityTrackedBody
+					var deadline time.Time
+					client.Transport = qualityHTTPTransport(func(r *http.Request) (*http.Response, error) {
+						calls++
+						body, err := io.ReadAll(r.Body)
+						require.NoError(t, err)
+						currentDeadline, ok := r.Context().Deadline()
+						require.True(t, ok)
+						if calls == 1 {
+							firstBody, firstKey, deadline = string(body), r.Header.Get("x-api-key"), currentDeadline
+						} else {
+							assert.Equal(t, firstBody, string(body), "retries must replay the same request")
+							assert.Equal(t, firstKey, r.Header.Get("x-api-key"), "retries must keep the selected key")
+							assert.Equal(t, deadline, currentDeadline, "retries must share the total deadline")
+						}
+						if lastBody != nil {
+							assert.True(t, lastBody.closed, "release the previous response before retrying")
+						}
+						lastBody = &qualityTrackedBody{Reader: strings.NewReader(`{"message":"final response"}`)}
+						status := tc.statuses[min(calls-1, len(tc.statuses)-1)]
+						return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/json"}, "Retry-After": {"5"}, "X-Amzn-Errortype": {"ThrottlingException"}}, Body: lastBody, Request: r}, nil
+					})
+					baseURL := "https://quality.example"
+					channel := &model.Channel{Type: constant.ChannelTypeAnthropic, Key: "key-a\nkey-b", BaseURL: &baseURL, ChannelInfo: model.ChannelInfo{IsMultiKey: true, MultiKeySize: 2, MultiKeyMode: constant.MultiKeyModePolling}}
+					if provider != "anthropic" {
+						channel.Type = constant.ChannelTypeAws
+						channel.ChannelInfo = model.ChannelInfo{}
+						channel.Key = "test-access|test-secret|us-east-1"
+						if provider == "mantle" {
+							channel.OtherSettings = `{"aws_api_type":"mantle"}`
+							channel.Key = "test-key|us-east-1"
+						}
+					}
+					probe := &model.ChannelQualityProbe{Headers: `{}`, Body: `{"model":"{{model}}","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`, Statuses: tc.expected}
+					if tc.wantVerdict == model.ChannelQualityVerdictFailed {
+						probe.Assertions = `[{"name":"quality","expr":"false"}]`
+					}
+					var keyIndex *int
+					if provider == "anthropic" {
+						index := 0
+						keyIndex = &index
+					}
+					outcome, err := auditAnthropicChannelWithRetry(context.Background(), channel, probe, "claude-sonnet-4-5", keyIndex, &tc.retries)
+					require.NoError(t, err)
+					assert.Equal(t, tc.wantVerdict, outcome.Verdict, outcome.Error)
+					assert.Equal(t, tc.wantCalls, calls, "including AWS SDK attempts")
+					assert.True(t, lastBody.closed)
+					require.NotNil(t, outcome.Response)
+					assert.JSONEq(t, `{"message":"final response"}`, string(outcome.Response.Body))
+					view := qualityRunView(&model.ChannelQualityRun{ProbeSnapshot: outcome.ProbeSnapshot})
+					execution := view["execution"].(*qualityExecution)
+					require.NotNil(t, execution)
+					assert.Equal(t, calls, execution.Attempts)
+					assert.Equal(t, tc.retries, execution.RetryLimit)
+					assert.Equal(t, int64((calls-1)*5000), execution.ElapsedMS)
+					if tc.wantVerdict == model.ChannelQualityVerdictUnknown {
+						assert.Equal(t, "retry_limit", execution.StopReason)
+					}
+				})
+			})
+		}
+	}
+}
+
+func TestQualityRetryBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name, retryAfter string
+		status, calls    int
+		cancel, timeout  bool
+		stopReason       string
+	}{
+		{name: "do not retry other HTTP errors", status: 503, calls: 1},
+		{name: "do not retry assertions", status: 200, calls: 1},
+		{name: "long Retry-After", status: 429, retryAfter: "120", calls: 1, stopReason: "time_budget"},
+		{name: "overflow Retry-After", status: 429, retryAfter: "18446744073709551615999999", calls: 1, stopReason: "time_budget"},
+		{name: "cancel during backoff", status: 429, calls: 1, cancel: true},
+		{name: "request uses total budget", calls: 1, timeout: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+				defer cancel()
+				calls := 0
+				response, execution := executeQualityRequests(ctx, 10, []int{200}, func() qualityProbeResponse {
+					calls++
+					if tc.cancel {
+						time.AfterFunc(time.Second, cancel)
+					}
+					if tc.timeout {
+						<-ctx.Done()
+						return qualityProbeResponse{err: ctx.Err()}
+					}
+					return qualityProbeResponse{status: tc.status, retryAfter: tc.retryAfter}
+				})
+				assert.Equal(t, tc.calls, calls)
+				assert.Equal(t, tc.stopReason, execution.StopReason)
+				if tc.cancel {
+					assert.ErrorIs(t, response.err, context.Canceled)
+				}
+				if tc.timeout {
+					assert.ErrorIs(t, response.err, context.DeadlineExceeded)
+				}
+			})
+		})
+	}
+	t.Run("ten retries cannot extend the total deadline", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), qualityAuditTimeout)
+			defer cancel()
+			response, execution := executeQualityRequests(ctx, 10, []int{200}, func() qualityProbeResponse {
+				return qualityProbeResponse{status: 429, retryAfter: "10"}
+			})
+			require.NoError(t, response.err)
+			assert.Equal(t, 429, response.status)
+			assert.Equal(t, "time_budget", execution.StopReason)
+			assert.LessOrEqual(t, execution.Attempts, 11)
+			assert.Less(t, execution.ElapsedMS, qualityAuditTimeout.Milliseconds())
+		})
+	})
+	t.Run("HTTP date Retry-After", func(t *testing.T) {
+		now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+		assert.Equal(t, 8*time.Second, qualityRetryDelay(now.Add(8*time.Second).Format(http.TimeFormat), 1, now))
+		for _, value := range []string{"", "bad", "-2", "0"} {
+			delay := qualityRetryDelay(value, 1, now)
+			assert.GreaterOrEqual(t, delay, 2*time.Second)
+			assert.Less(t, delay, 3*time.Second)
+		}
+	})
+	t.Run("manual probe remains single attempt", func(t *testing.T) {
+		client, err := service.GetHttpClientWithProxy("")
+		require.NoError(t, err)
+		previous := client.Transport
+		t.Cleanup(func() { client.Transport = previous })
+		calls := 0
+		client.Transport = qualityHTTPTransport(func(r *http.Request) (*http.Response, error) {
+			calls++
+			return &http.Response{StatusCode: 429, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{}`)), Request: r}, nil
+		})
+		baseURL := "https://quality.example"
+		outcome, err := auditAnthropicChannel(context.Background(), &model.Channel{Type: constant.ChannelTypeAnthropic, Key: "test", BaseURL: &baseURL}, &model.ChannelQualityProbe{Body: `{"model":"claude-sonnet"}`}, "", nil)
+		require.NoError(t, err)
+		assert.Equal(t, 1, calls)
+		assert.Equal(t, model.ChannelQualityVerdictUnknown, outcome.Verdict)
+	})
 }

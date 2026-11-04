@@ -98,6 +98,7 @@ type QualityWebhookAlert struct {
 	EventID         string                  `json:"event_id"`
 	ChannelID       int                     `json:"channel_id"`
 	ChannelName     string                  `json:"channel_name"`
+	ChannelAction   string                  `json:"channel_action,omitempty"`
 	SuiteID         int                     `json:"suite_id"`
 	SuiteRunID      int                     `json:"suite_run_id"`
 	SuiteName       string                  `json:"suite_name"`
@@ -260,6 +261,12 @@ func FormatQualityWebhookNotification(alerts []QualityWebhookAlert, language str
 	content.WriteString(i18n.Translate(language, i18n.MsgQualitySummary, map[string]any{"Count": len(alerts)}))
 	for _, alert := range alerts {
 		channelDetails := i18n.Translate(language, i18n.MsgQualityChannelDetails, map[string]any{"ChannelID": alert.ChannelID, "ChannelName": alert.ChannelName, "SuiteID": alert.SuiteID, "SuiteName": alert.SuiteName, "RunID": alert.SuiteRunID})
+		switch alert.ChannelAction {
+		case "disabled":
+			channelDetails += "\n" + i18n.Translate(language, i18n.MsgQualityChannelDisabled)
+		case "disable_failed":
+			channelDetails += "\n" + i18n.Translate(language, i18n.MsgQualityChannelDisableFailed)
+		}
 		var details strings.Builder
 		for _, failure := range alert.Failures {
 			details.WriteString("\n\n")

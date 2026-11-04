@@ -759,6 +759,15 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 	pollingLock.Lock()
 	defer pollingLock.Unlock()
 
+	// An ordinary health check cannot prove that a failed quality assertion has
+	// recovered. Explicit user operations supply a non-empty reason and may enable it.
+	if status == common.ChannelStatusEnabled && reason == "" {
+		channel, err := GetChannelById(channelId, true)
+		if err != nil || channel.GetOtherInfo()["status_reason"] == ChannelStatusReasonQualityFailed {
+			return false
+		}
+	}
+
 	if common.MemoryCacheEnabled {
 		channelCache, _ := CacheGetChannel(channelId)
 		if channelCache == nil {

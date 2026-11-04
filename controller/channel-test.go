@@ -970,8 +970,9 @@ func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, test
 	}
 
 	if result.localErr == nil && !isChannelEnabled && service.ShouldEnableChannel(newAPIError, channel.Status) {
-		service.EnableChannel(channel.Id, common.GetChannelCredentialIdentity(result.context), channel.Name)
-		summary.Enabled++
+		if service.EnableChannel(channel.Id, common.GetChannelCredentialIdentity(result.context), channel.Name) {
+			summary.Enabled++
+		}
 	}
 
 	channel.UpdateResponseTime(milliseconds)

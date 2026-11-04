@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -100,10 +101,14 @@ function passedRun(): ChannelQualityRun {
   }
 }
 
-function renderPage(row: Channel, run: ChannelQualityRun | null) {
+function renderPage(
+  row: Channel,
+  run: ChannelQualityRun | null,
+  probes: ChannelQualityProbe[] = [builtinProbe]
+) {
   vi.spyOn(api, 'get').mockImplementation(async (url, config) => {
     if (url === '/api/channel/quality/probes') {
-      return { data: { success: true, data: [builtinProbe] } }
+      return { data: { success: true, data: probes } }
     }
     if (url === '/api/channel/quality/suites') {
       return { data: { success: true, data: [] } }
@@ -239,6 +244,7 @@ it('offers retry after a suite request fails without showing an empty list', asy
 })
 
 it('filters suites by model and opens an explicit edit action', async () => {
+  vi.stubGlobal('crypto', undefined)
   const user = userEvent.setup()
   vi.spyOn(api, 'get').mockImplementation(async (url) => ({
     data: {
@@ -275,6 +281,7 @@ afterEach(() => {
   cleanup()
   client.clear()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
   useAuthStore.setState({ auth: originalAuth })
 })
 
@@ -333,6 +340,7 @@ it('lets an AWS channel run a Messages audit', async () => {
 })
 
 it('opens the suite dialog from the quality page', async () => {
+  vi.stubGlobal('crypto', undefined)
   const user = userEvent.setup()
   renderPage(channel(CHANNEL_TYPE_ANTHROPIC), null)
   await user.click(await screen.findByRole('tab', { name: 'Manage suites' }))
@@ -350,6 +358,8 @@ it('opens the suite dialog from the quality page', async () => {
   expect(screen.getByRole('combobox', { name: 'Probe' })).toHaveTextContent(
     'clear_tool_uses'
   )
+  await user.click(screen.getByRole('button', { name: 'Add probe' }))
+  expect(screen.getAllByRole('combobox', { name: 'Probe' })).toHaveLength(2)
 })
 
 it('shows the passed verdict and opens the result details', async () => {
@@ -371,34 +381,49 @@ it('shows the passed verdict and opens the result details', async () => {
   expect(within(dialog).getByText('Applied edits')).toBeInTheDocument()
 })
 
-it('keeps a builtin probe read-only on the quality page', async () => {
-  const user = userEvent.setup()
-  renderPage(channel(CHANNEL_TYPE_ANTHROPIC), null)
-  await user.click(await screen.findByRole('tab', { name: 'Manage probes' }))
-  const section = await screen.findByRole('tabpanel', { name: 'Manage probes' })
-  await user.click(
-    await within(section as HTMLElement).findByRole('button', {
-      name: 'clear_tool_uses',
+it.each(['available', 'missing randomUUID', 'missing crypto'])(
+  'keeps a builtin probe read-only with browser crypto: %s',
+  async (availability) => {
+    if (availability === 'missing randomUUID') {
+      vi.stubGlobal('crypto', {
+        getRandomValues: globalThis.crypto.getRandomValues.bind(
+          globalThis.crypto
+        ),
+      })
+    } else if (availability === 'missing crypto') {
+      vi.stubGlobal('crypto', undefined)
+    }
+    const user = userEvent.setup()
+    renderPage(channel(CHANNEL_TYPE_ANTHROPIC), null)
+    await user.click(await screen.findByRole('tab', { name: 'Manage probes' }))
+    const section = await screen.findByRole('tabpanel', {
+      name: 'Manage probes',
     })
-  )
-  expect(
-    screen.getByText('Builtin probes cannot be edited')
-  ).toBeInTheDocument()
-  expect(screen.getByLabelText('Probe name')).toBeDisabled()
-  expect(screen.getByText('200')).toBeInTheDocument()
-  expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
-  expect(
-    screen.getByText('Any item in a list · context_management.applied_edits')
-  ).toBeInTheDocument()
-  expect(screen.getByText('cleared_tool_uses Equals 3')).toBeInTheDocument()
-  expect(screen.queryByLabelText('List path')).not.toBeInTheDocument()
-  expect(
-    screen.queryByRole('button', { name: 'Save probe' })
-  ).not.toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'Duplicate' })).toBeEnabled()
-})
+    await user.click(
+      await within(section as HTMLElement).findByRole('button', {
+        name: 'clear_tool_uses',
+      })
+    )
+    expect(
+      screen.getByText('Builtin probes cannot be edited')
+    ).toBeInTheDocument()
+    expect(screen.getByLabelText('Probe name')).toBeDisabled()
+    expect(screen.getByText('200')).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+    expect(
+      screen.getByText('Any item in a list · context_management.applied_edits')
+    ).toBeInTheDocument()
+    expect(screen.getByText('cleared_tool_uses Equals 3')).toBeInTheDocument()
+    expect(screen.queryByLabelText('List path')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Save probe' })
+    ).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Duplicate' })).toBeEnabled()
+  }
+)
 
 it('adds a custom status, a header row, and an assertion from the new probe form', async () => {
+  vi.stubGlobal('crypto', undefined)
   const user = userEvent.setup()
   renderPage(channel(CHANNEL_TYPE_ANTHROPIC), null)
   await user.click(await screen.findByRole('tab', { name: 'Manage probes' }))
@@ -431,6 +456,153 @@ it('adds a custom status, a header row, and an assertion from the new probe form
     await screen.findByRole('dialog', { name: 'Add assertion' })
   ).toBeInTheDocument()
   expect(screen.getByLabelText('Assertion name')).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Add condition' }))
+  expect(screen.getAllByLabelText('Field path')).toHaveLength(2)
+})
+
+it('opens and saves a legacy probe with a null assertion list', async () => {
+  const user = userEvent.setup()
+  const probe = {
+    ...builtinProbe,
+    id: 4,
+    name: 'Status only',
+    builtin: false,
+    assertions: null,
+  }
+  const put = vi
+    .spyOn(api, 'put')
+    .mockResolvedValue({ data: { success: true, data: probe } })
+  // Older records can return null for the optional assertion list.
+  renderPage(channel(CHANNEL_TYPE_ANTHROPIC), null, [probe])
+  await user.click(screen.getByRole('tab', { name: 'Manage probes' }))
+  await user.click(await screen.findByRole('button', { name: 'Status only' }))
+  expect(
+    screen.getByText('No assertions yet. A matching response status is enough.')
+  ).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Save probe' }))
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith('/api/channel/quality/probes/4', {
+      name: 'Status only',
+      headers: probe.headers,
+      body: probe.body,
+      statuses: [200],
+      assertions: [],
+    })
+  )
+  expect(screen.getByLabelText('Probe name')).toHaveValue('Status only')
+})
+
+it('duplicates and saves a probe without crypto while preserving its custom assertion', async () => {
+  vi.stubGlobal('crypto', undefined)
+  const user = userEvent.setup()
+  const original = {
+    ...builtinProbe,
+    assertions: [{ name: 'Has content', expr: 'len(content) > 0' }],
+  }
+  const copied = {
+    ...original,
+    id: 4,
+    name: 'clear_tool_uses_copy',
+    builtin: false,
+  }
+  const post = vi
+    .spyOn(api, 'post')
+    .mockResolvedValue({ data: { success: true, data: copied } })
+  const put = vi.spyOn(api, 'put').mockResolvedValue({
+    data: { success: true, data: { ...copied, name: 'Saved copy' } },
+  })
+  renderPage(channel(CHANNEL_TYPE_ANTHROPIC), null, [original])
+  await user.click(screen.getByRole('tab', { name: 'Manage probes' }))
+  await user.click(await screen.findByRole('button', { name: original.name }))
+  await user.click(screen.getByRole('button', { name: 'Duplicate' }))
+  await waitFor(() =>
+    expect(screen.getByLabelText('Probe name')).toHaveValue(copied.name)
+  )
+  expect(post).toHaveBeenCalledWith('/api/channel/quality/probes/3/copy')
+  expect(screen.getByLabelText('Probe name')).toBeEnabled()
+  expect(screen.getByLabelText('Header value')).toHaveValue(
+    original.headers['anthropic-beta']
+  )
+  await user.click(screen.getByRole('button', { name: 'Edit assertion' }))
+  const editor = await screen.findByRole('dialog', { name: 'Edit assertion' })
+  expect(
+    within(editor).getByRole('button', { name: 'Replace condition' })
+  ).toBeInTheDocument()
+  await user.click(within(editor).getByRole('button', { name: 'Cancel' }))
+  await user.clear(screen.getByLabelText('Probe name'))
+  await user.type(screen.getByLabelText('Probe name'), 'Saved copy')
+  await user.click(screen.getByRole('button', { name: 'Save probe' }))
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith('/api/channel/quality/probes/4', {
+      name: 'Saved copy',
+      headers: original.headers,
+      body: original.body,
+      statuses: [200],
+      assertions: original.assertions,
+    })
+  )
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Save probe' })).toBeEnabled()
+  )
+  expect(screen.getByText('len(content) > 0')).toBeInTheDocument()
+})
+
+it('clears unsaved header rows when switching to a different probe with the same headers', async () => {
+  const user = userEvent.setup()
+  renderPage(channel(CHANNEL_TYPE_ANTHROPIC), null, [
+    {
+      ...builtinProbe,
+      id: 4,
+      name: 'First probe',
+      builtin: false,
+      headers: {},
+    },
+    {
+      ...builtinProbe,
+      id: 5,
+      name: 'Second probe',
+      builtin: false,
+      headers: {},
+    },
+  ])
+  await user.click(screen.getByRole('tab', { name: 'Manage probes' }))
+  await user.click(await screen.findByRole('button', { name: 'First probe' }))
+  await user.click(screen.getByRole('button', { name: 'Add header' }))
+  expect(screen.getByLabelText('Header name')).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Second probe' }))
+  expect(screen.queryByLabelText('Header name')).not.toBeInTheDocument()
+  expect(screen.getByText('No headers yet')).toBeInTheDocument()
+})
+
+it('explains non-string header values and preserves JSON edits until they are corrected', async () => {
+  const user = userEvent.setup()
+  const probe = { ...builtinProbe, id: 4, builtin: false, headers: {} }
+  renderPage(channel(CHANNEL_TYPE_ANTHROPIC), null, [probe])
+  await user.click(screen.getByRole('tab', { name: 'Manage probes' }))
+  await user.click(
+    await screen.findByRole('button', { name: 'clear_tool_uses' })
+  )
+  await user.click(screen.getByRole('tab', { name: 'JSON' }))
+  const invalid = '{"user_group_ratio":-1}'
+  fireEvent.input(screen.getByRole('textbox', { name: 'Headers' }), {
+    target: { value: invalid },
+  })
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    'Request headers must be a JSON object with string values.'
+  )
+  await user.click(screen.getByRole('tab', { name: 'Visual' }))
+  expect(screen.getByRole('tab', { name: 'JSON' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  )
+  expect(screen.getByRole('textbox', { name: 'Headers' })).toHaveValue(invalid)
+  fireEvent.input(screen.getByRole('textbox', { name: 'Headers' }), {
+    target: { value: '{"user_group_ratio":"-1"}' },
+  })
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  await user.click(screen.getByRole('tab', { name: 'Visual' }))
+  expect(screen.getByLabelText('Header name')).toHaveValue('user_group_ratio')
+  expect(screen.getByLabelText('Header value')).toHaveValue('-1')
 })
 
 it('wraps long suite names and model identifiers without hiding their text', async () => {
@@ -487,3 +659,42 @@ it('opens suite details with the keyboard for a read-only user', async () => {
     screen.queryByRole('button', { name: 'Delete' })
   ).not.toBeInTheDocument()
 })
+
+it.each([
+  [
+    'retry_limit',
+    'Rate limited; retry limit reached. No failure action was triggered by this result.',
+  ],
+  [
+    'time_budget',
+    'Rate limited; the next retry would exceed the time budget. No failure action was triggered by this result.',
+  ],
+])(
+  'shows recorded retry counts and %s in audit details',
+  async (reason, message) => {
+    const user = userEvent.setup()
+    renderPage(channel(CHANNEL_TYPE_ANTHROPIC), {
+      ...passedRun(),
+      verdict: 'unknown',
+      execution: {
+        attempts: 3,
+        retry_limit: 2,
+        elapsed_ms: 10000,
+        stop_reason: reason,
+      },
+    })
+    await user.click(await screen.findByRole('tab', { name: 'Audit records' }))
+    await user.click(
+      await screen.findByRole('button', { name: /clear_tool_uses/ })
+    )
+    const dialog = await screen.findByRole('dialog', {
+      name: 'clear_tool_uses',
+    })
+    const retries = within(dialog).getByText('Actual retries').parentElement
+    expect(retries?.querySelector('dd')).toHaveTextContent('2')
+    const limit = within(dialog).getByText('429 retry count').parentElement
+    expect(limit?.querySelector('dd')).toHaveTextContent('2')
+    expect(within(dialog).getByText('Elapsed time (ms)')).toBeVisible()
+    expect(within(dialog).getByText(message)).toBeVisible()
+  }
+)

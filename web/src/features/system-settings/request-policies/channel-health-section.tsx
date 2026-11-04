@@ -107,6 +107,15 @@ const createChannelHealthSchema = (
           ),
         channel_test_mode: z.enum(channelTestModes),
         auto_quality_enabled: z.boolean(),
+        quality_disable_on_failure: z.boolean(),
+        quality_429_retries: z.coerce
+          .number()
+          .int(t('quality 429 retries must be an integer between 0 and 10'))
+          .min(0, t('quality 429 retries must be an integer between 0 and 10'))
+          .max(
+            10,
+            t('quality 429 retries must be an integer between 0 and 10')
+          ),
         auto_quality_minutes: z.coerce
           .number()
           .int()
@@ -155,6 +164,8 @@ type NormalizedChannelHealthValues = {
   'monitor_setting.channel_test_concurrency': number
   'monitor_setting.channel_test_mode': ChannelTestMode
   'monitor_setting.auto_quality_enabled': boolean
+  'monitor_setting.quality_disable_on_failure': boolean
+  'monitor_setting.quality_429_retries': number
   'monitor_setting.auto_quality_minutes': number
 }
 
@@ -187,6 +198,9 @@ const buildFormDefaults = (
     ),
     auto_quality_enabled:
       defaults['monitor_setting.auto_quality_enabled'] ?? false,
+    quality_disable_on_failure:
+      defaults['monitor_setting.quality_disable_on_failure'] ?? false,
+    quality_429_retries: defaults['monitor_setting.quality_429_retries'] ?? 0,
     auto_quality_minutes:
       defaults['monitor_setting.auto_quality_minutes'] ?? 60,
   },
@@ -215,6 +229,10 @@ const normalizeDefaults = (
   ),
   'monitor_setting.auto_quality_enabled':
     defaults['monitor_setting.auto_quality_enabled'] ?? false,
+  'monitor_setting.quality_disable_on_failure':
+    defaults['monitor_setting.quality_disable_on_failure'] ?? false,
+  'monitor_setting.quality_429_retries':
+    defaults['monitor_setting.quality_429_retries'] ?? 0,
   'monitor_setting.auto_quality_minutes':
     defaults['monitor_setting.auto_quality_minutes'] ?? 60,
 })
@@ -240,6 +258,10 @@ const normalizeFormValues = (
   'monitor_setting.channel_test_mode': values.monitor_setting.channel_test_mode,
   'monitor_setting.auto_quality_enabled':
     values.monitor_setting.auto_quality_enabled,
+  'monitor_setting.quality_disable_on_failure':
+    values.monitor_setting.quality_disable_on_failure,
+  'monitor_setting.quality_429_retries':
+    values.monitor_setting.quality_429_retries,
   'monitor_setting.auto_quality_minutes':
     values.monitor_setting.auto_quality_minutes,
 })
@@ -276,6 +298,22 @@ export function ChannelHealthSection({
   }, [defaultValues])
 
   const autoDisableStatusCodes = form.watch('AutomaticDisableStatusCodes')
+  const qualityDisableEnabled = form.watch(
+    'monitor_setting.quality_disable_on_failure'
+  )
+  const autoDisableEnabled = form.watch('AutomaticDisableChannelEnabled')
+  let disableDescription = t(
+    'With these settings, automatic disabling is off for all channels.'
+  )
+  if (qualityDisableEnabled) {
+    disableDescription = t(
+      'Scheduled quality scans can disable channels independently of the general auto-disable rules.'
+    )
+  } else if (autoDisableEnabled) {
+    disableDescription = t(
+      'Channels must also enable Auto Ban before automatic disabling can take effect.'
+    )
+  }
   const channelTestMode = form.watch('monitor_setting.channel_test_mode')
   let channelTestModeDescription: string
   switch (channelTestMode) {
@@ -324,15 +362,7 @@ export function ChannelHealthSection({
     <SettingsSection title={t('Channel health')}>
       <div className='text-muted-foreground space-y-1 text-sm'>
         <p>{t('Source: global settings. Changes take effect after saving.')}</p>
-        <p>
-          {form.watch('AutomaticDisableChannelEnabled')
-            ? t(
-                'Channels must also enable Auto Ban before automatic disabling can take effect.'
-              )
-            : t(
-                'With these settings, automatic disabling is off for all channels.'
-              )}
-        </p>
+        <p>{disableDescription}</p>
         {form.watch('AutomaticEnableChannelEnabled') &&
           !form.watch('monitor_setting.auto_test_channel_enabled') && (
             <p>
@@ -535,8 +565,28 @@ export function ChannelHealthSection({
                     <SettingsSwitchContent>
                       <FormLabel>{t('Auto quality check')}</FormLabel>
                       <FormDescription>
+                        {t('Run the suite bound to each enabled channel.')}
+                      </FormDescription>
+                    </SettingsSwitchContent>
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                      />
+                    </FormControl>
+                  </SettingsSwitchItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name='monitor_setting.quality_disable_on_failure'
+                render={({ field }) => (
+                  <SettingsSwitchItem>
+                    <SettingsSwitchContent>
+                      <FormLabel>{t('Disable on quality failure')}</FormLabel>
+                      <FormDescription>
                         {t(
-                          'Run the suite bound to each enabled channel. A failed scan does not disable the channel.'
+                          'Only scheduled quality scans can disable a channel when a probe fails. Manual checks do not disable channels. If Webhook alerts are enabled, an alert is sent after disabling. Manual recovery is required.'
                         )}
                       </FormDescription>
                     </SettingsSwitchContent>
@@ -547,6 +597,30 @@ export function ChannelHealthSection({
                       />
                     </FormControl>
                   </SettingsSwitchItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name='monitor_setting.quality_429_retries'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('429 retry count')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={0}
+                        max={10}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Additional retries for unexpected 429 responses in scheduled scans (0-10). Zero disables retries. All attempts share a 60-second limit. Exhausted retries do not disable channels or trigger failure alerts.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
                 )}
               />
               <FormField
