@@ -76,9 +76,11 @@ type GeneralOpenAIRequest struct {
 	PromptCacheKey       string          `json:"prompt_cache_key,omitempty"`
 	PromptCacheOptions   json.RawMessage `json:"prompt_cache_options,omitempty"`
 	PromptCacheRetention json.RawMessage `json:"prompt_cache_retention,omitempty"`
-	LogitBias            json.RawMessage `json:"logit_bias,omitempty"`
-	Metadata             json.RawMessage `json:"metadata,omitempty"`
-	Prediction           json.RawMessage `json:"prediction,omitempty"`
+	// Claude-compatible automatic prompt caching.
+	CacheControl json.RawMessage `json:"cache_control,omitempty"`
+	LogitBias    json.RawMessage `json:"logit_bias,omitempty"`
+	Metadata     json.RawMessage `json:"metadata,omitempty"`
+	Prediction   json.RawMessage `json:"prediction,omitempty"`
 	// gemini
 	ExtraBody   json.RawMessage `json:"extra_body,omitempty"`
 	ImageConfig json.RawMessage `json:"imageConfig,omitempty"`

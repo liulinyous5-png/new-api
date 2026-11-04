@@ -71,6 +71,7 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 		Model:         textRequest.Model,
 		StopSequences: nil,
 		Temperature:   textRequest.Temperature,
+		CacheControl:  textRequest.CacheControl,
 	}
 	if len(claudeTools) > 0 {
 		claudeRequest.Tools = claudeTools
@@ -143,6 +144,31 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 			Role:    message.Role,
 			Content: message.Content,
 		}
+		if content, ok := message.Content.([]any); ok && message.Role != "tool" {
+			mediaContent := make([]dto.MediaContent, 0, len(content))
+			for _, item := range content {
+				contentMessage := dto.Message{Content: []any{item}}
+				parsedContent := contentMessage.ParseContent()
+				if len(parsedContent) == 0 {
+					continue
+				}
+				mediaContent = append(mediaContent, parsedContent...)
+				contentItem, ok := item.(map[string]any)
+				if !ok {
+					continue
+				}
+				cacheControl, ok := contentItem["cache_control"]
+				if !ok {
+					continue
+				}
+				cacheControlJSON, err := kitutil.Marshal(cacheControl)
+				if err != nil {
+					return nil, fmt.Errorf("invalid Claude cache_control: %w", err)
+				}
+				mediaContent[len(mediaContent)-1].CacheControl = cacheControlJSON
+			}
+			fmtMessage.SetMediaContent(mediaContent)
+		}
 		if message.Role == "tool" {
 			fmtMessage.ToolCallId = message.ToolCallId
 		}
@@ -208,8 +234,9 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 				for _, ctx := range message.ParseContent() {
 					if ctx.Type == "text" && ctx.Text != "" {
 						systemMessages = append(systemMessages, dto.ClaudeMediaMessage{
-							Type: "text",
-							Text: kitutil.GetPointer[string](ctx.Text),
+							Type:         "text",
+							Text:         kitutil.GetPointer[string](ctx.Text),
+							CacheControl: ctx.CacheControl,
 						})
 					}
 				}
@@ -268,8 +295,9 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 				case "text":
 					if mediaMessage.Text != "" {
 						claudeMediaMessages = append(claudeMediaMessages, dto.ClaudeMediaMessage{
-							Type: "text",
-							Text: kitutil.GetPointer[string](mediaMessage.Text),
+							Type:         "text",
+							Text:         kitutil.GetPointer[string](mediaMessage.Text),
+							CacheControl: mediaMessage.CacheControl,
 						})
 					}
 				default:
@@ -297,6 +325,7 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 						})
 						continue
 					}
+					block.CacheControl = mediaMessage.CacheControl
 					claudeMediaMessages = append(claudeMediaMessages, block)
 					continue
 				}

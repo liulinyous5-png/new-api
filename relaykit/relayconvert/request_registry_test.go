@@ -213,6 +213,110 @@ func TestConvertRequestToTargetRecordsConversionChain(t *testing.T) {
 	assert.Equal(t, []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses}, info.ConversionChain)
 }
 
+func TestConvertRequestChatToClaudePreservesCacheControl(t *testing.T) {
+	tests := []struct {
+		name         string
+		cacheControl string
+		messages     string
+		wantSystem   string
+		wantMessages string
+	}{
+		{
+			name:         "no cache control",
+			messages:     `[{"role":"user","content":"Hello"}]`,
+			wantMessages: `[{"role":"user","content":"Hello"}]`,
+		},
+		{
+			name:         "top level automatic caching",
+			cacheControl: `{"type":"ephemeral"}`,
+			messages:     `[{"role":"user","content":"Hello"}]`,
+			wantMessages: `[{"role":"user","content":"Hello"}]`,
+		},
+		{
+			name:         "top level TTL and explicit system breakpoint",
+			cacheControl: `{"type":"ephemeral","ttl":"1h"}`,
+			messages: `[
+				{"role":"system","content":[
+					{"type":"text","text":"Stable instructions","cache_control":{"type":"ephemeral","ttl":"1h"}},
+					{"type":"text","text":"Uncached instructions"}
+				]},
+				{"role":"user","content":"Summarize"}
+			]`,
+			wantSystem: `[
+				{"type":"text","text":"Stable instructions","cache_control":{"type":"ephemeral","ttl":"1h"}},
+				{"type":"text","text":"Uncached instructions"}
+			]`,
+			wantMessages: `[{"role":"user","content":"Summarize"}]`,
+		},
+		{
+			name: "developer text",
+			messages: `[
+				{"role":"developer","content":[{"type":"text","text":"Stable instructions","cache_control":{"type":"ephemeral"}}]},
+				{"role":"user","content":"Summarize"}
+			]`,
+			wantSystem:   `[{"type":"text","text":"Stable instructions","cache_control":{"type":"ephemeral"}}]`,
+			wantMessages: `[{"role":"user","content":"Summarize"}]`,
+		},
+		{
+			name: "user and assistant text blocks",
+			messages: `[
+				{"role":"user","content":[
+					{"type":"text","text":"Stable context","cache_control":{"type":"ephemeral"}},
+					{"type":"text","text":"Uncached question"}
+				]},
+				{"role":"assistant","content":[{"type":"text","text":"Stable answer","cache_control":{"type":"ephemeral","ttl":"1h"}}]}
+			]`,
+			wantMessages: `[
+				{"role":"user","content":[
+					{"type":"text","text":"Stable context","cache_control":{"type":"ephemeral"}},
+					{"type":"text","text":"Uncached question"}
+				]},
+				{"role":"assistant","content":[{"type":"text","text":"Stable answer","cache_control":{"type":"ephemeral","ttl":"1h"}}]}
+			]`,
+		},
+		{
+			name: "image block",
+			messages: `[{"role":"user","content":[
+				{"type":"text","text":"Describe this image"},
+				{"type":"image_url","image_url":{"url":"data:image/png;base64,aGVsbG8="},"cache_control":{"type":"ephemeral"}}
+			]}]`,
+			wantMessages: `[{"role":"user","content":[
+				{"type":"text","text":"Describe this image"},
+				{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="},"cache_control":{"type":"ephemeral"}}
+			]}]`,
+		},
+		{
+			name: "unsupported block does not mark preceding text",
+			messages: `[{"role":"user","content":[
+				{"type":"text","text":"Uncached text"},
+				{"type":"unsupported","cache_control":{"type":"ephemeral"}}
+			]}]`,
+			wantMessages: `[{"role":"user","content":[{"type":"text","text":"Uncached text"}]}]`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requestJSON := `{"model":"claude-opus-4-6","max_tokens":1024,"messages":` + tt.messages
+			want := `{"model":"claude-opus-4-6","max_tokens":1024,"messages":` + tt.wantMessages
+			if tt.cacheControl != "" {
+				requestJSON += `,"cache_control":` + tt.cacheControl
+				want += `,"cache_control":` + tt.cacheControl
+			}
+			if tt.wantSystem != "" {
+				want += `,"system":` + tt.wantSystem
+			}
+			var request dto.GeneralOpenAIRequest
+			require.NoError(t, kitutil.UnmarshalJsonStr(requestJSON+`}`, &request))
+			result, err := ConvertRequest(nil, nil, types.RelayFormatClaude, &request)
+			require.NoError(t, err)
+			body, err := kitutil.Marshal(result.Value)
+			require.NoError(t, err)
+			assert.JSONEq(t, want+`}`, string(body))
+		})
+	}
+}
+
 func TestConvertRequestClaudeToResponsesUsesDirectPath(t *testing.T) {
 	info := &convmeta.Values{
 		ConversionChain: []types.RelayFormat{types.RelayFormatClaude},
