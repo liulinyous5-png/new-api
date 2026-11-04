@@ -31,6 +31,7 @@ import {
 } from '../api'
 import {
   LOG_TYPES,
+  LOG_TYPE_ENUM,
   DISPLAYABLE_LOG_TYPES,
   TIMING_LOG_TYPES,
 } from '../constants'
@@ -47,6 +48,13 @@ export { buildQueryParams } from './query-params'
 // ============================================================================
 // Type Checkers & Utilities
 // ============================================================================
+
+/**
+ * Check if log records consumption, including requests with client trace IDs
+ */
+export function isConsumeLogType(type: number): boolean {
+  return type === LOG_TYPE_ENUM.CONSUME || type === LOG_TYPE_ENUM.TRACE
+}
 
 /**
  * Check if log type is displayable (has detailed info)

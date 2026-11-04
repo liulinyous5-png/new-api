@@ -6687,6 +6687,7 @@
     "Total:": "总计：",
     "TPM": "TPM",
     "Trace ID": "追踪 ID",
+    "Trace request": "链路请求",
     "Track per-request consumption to power usage analytics. Keeping this on increases database writes.": "跟踪每个请求的消耗，以支持使用情况分析。保持开启会增加数据库写入。",
     "Track usage, costs and performance with real-time analytics": "通过实时分析跟踪用量、成本和性能",
     "Tracked apps": "已跟踪的应用",

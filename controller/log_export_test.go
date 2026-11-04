@@ -149,8 +149,114 @@ func TestLogExportDatabaseMatrix(t *testing.T) {
 			assert.Equal(t, "primary", all[2]["channel_name"])
 			assert.Contains(t, all[2]["other"], "admin_info")
 			assert.Equal(t, true, all[3]["success"])
+			t.Run("trace request types", func(t *testing.T) {
+				verifyTraceRequestLogTypes(t, mainDB)
+			})
 		})
 	}
+}
+
+func verifyTraceRequestLogTypes(t *testing.T, mainDB *gorm.DB) {
+	t.Helper()
+	previousConsume, previousExport, previousCallback := common.LogConsumeEnabled, common.DataExportEnabled, model.OnConsumeLogRecorded
+	common.LogConsumeEnabled, common.DataExportEnabled, model.OnConsumeLogRecorded = true, false, nil
+	t.Cleanup(func() {
+		common.LogConsumeEnabled, common.DataExportEnabled, model.OnConsumeLogRecorded = previousConsume, previousExport, previousCallback
+	})
+	require.NoError(t, mainDB.AutoMigrate(&model.User{}))
+	require.NoError(t, mainDB.Create(&model.User{Id: 1, Username: "trace-user"}).Error)
+	now := time.Now().Unix()
+	for _, tc := range []struct {
+		name, header, value string
+		wantType            int
+	}{
+		{"ordinary", "", "", model.LogTypeConsume},
+		{"trace", "X-Trace-Id", "trace-1", model.LogTypeTrace},
+		{"request", "X-Request-ID", "client-1", model.LogTypeTrace},
+		{"blank", "X-Trace-Id", "   ", model.LogTypeConsume},
+		{"unsafe", "X-Request-ID", "bad\nvalue", model.LogTypeConsume},
+		{"session", "X-Conversation-Id", "session-1", model.LogTypeConsume},
+	} {
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		ctx.Set("username", "trace-user")
+		ctx.Set(common.RequestIdKey, tc.name)
+		if tc.header != "" {
+			ctx.Request.Header.Set(tc.header, tc.value)
+		}
+		model.RecordConsumeLog(ctx, 1, model.RecordConsumeLogParams{
+			ModelName: "trace-test", ChannelId: 9, TokenName: "trace-token", Group: "trace-group",
+			Quota: 10, PromptTokens: 2, CompletionTokens: 3,
+		})
+		model.RecordErrorLog(ctx, 1, 9, "trace-test", "trace-token", "failed", 0, 1, false, "trace-group", nil)
+		var rows []model.Log
+		require.NoError(t, model.LOG_DB.Where("request_id = ?", tc.name).Find(&rows).Error)
+		require.Len(t, rows, 1, "each request writes exactly one consume log")
+		assert.Equal(t, tc.wantType, rows[0].Type, tc.name)
+		assert.Equal(t, 10, rows[0].Quota)
+		if tc.wantType == model.LogTypeTrace {
+			assert.Contains(t, rows[0].Other, tc.value)
+		}
+	}
+	// A different user's matching type must not leak into user lists or totals.
+	require.NoError(t, model.LOG_DB.Create(&model.Log{
+		UserId: 2, Username: "another-user", CreatedAt: now, Type: model.LogTypeTrace,
+		ModelName: "trace-test", Quota: 99, RequestId: "other-user",
+	}).Error)
+	query := fmt.Sprintf("model_name=trace-test&start_timestamp=%d&end_timestamp=%d", now-3600, now+3600)
+	for _, tc := range []struct{ typ, count int }{{0, 6}, {model.LogTypeConsume, 4}, {model.LogTypeTrace, 2}} {
+		filtered := fmt.Sprintf("%s&type=%d", query, tc.typ)
+		for _, endpoint := range []struct {
+			list, export gin.HandlerFunc
+			role         int
+			query        string
+		}{
+			{GetUserLogs, ExportUserLogs, common.RoleCommonUser, filtered},
+			{GetAllLogs, ExportAllLogs, common.RoleAdminUser, filtered + "&username=trace-user"},
+		} {
+			listed := callLogHandler(t, endpoint.list, 1, endpoint.role, endpoint.query)[0]
+			require.Equal(t, true, listed["success"])
+			assert.EqualValues(t, tc.count, listed["data"].(map[string]any)["total"])
+			exported := callLogHandler(t, endpoint.export, 1, endpoint.role, endpoint.query)
+			require.Len(t, exported, tc.count+1)
+			assert.Equal(t, true, exported[tc.count]["success"])
+			for _, row := range exported[:tc.count] {
+				if tc.typ != 0 {
+					assert.EqualValues(t, tc.typ, row["type"])
+				}
+				assert.NotContains(t, row, "request_type")
+			}
+		}
+		stat, err := model.SumUsedQuota(tc.typ, now-3600, now+3600, "trace-test", "trace-user", "trace-token", 9, "trace-group")
+		require.NoError(t, err)
+		assert.Equal(t, model.Stat{Quota: tc.count * 10, Rpm: tc.count, Tpm: tc.count * 5}, stat)
+		assert.Equal(t, tc.count*5, model.SumUsedToken(tc.typ, now-3600, now+3600, "trace-test", "trace-user", "trace-token"))
+		for _, handler := range []gin.HandlerFunc{GetLogsStat, func(c *gin.Context) {
+			c.Set("username", "trace-user")
+			GetLogsSelfStat(c)
+		}} {
+			response := callLogHandler(t, handler, 1, common.RoleCommonUser, filtered+"&username=trace-user")[0]
+			require.Equal(t, true, response["success"])
+			assert.Equal(t, map[string]any{"quota": float64(tc.count * 10), "rpm": float64(tc.count), "tpm": float64(tc.count * 5)}, response["data"])
+		}
+	}
+	errors := callLogHandler(t, GetUserErrorLogs, 1, common.RoleCommonUser, query)[0]
+	require.Equal(t, true, errors["success"])
+	assert.EqualValues(t, 6, errors["data"].(map[string]any)["total"])
+	var errorRows []model.ErrorLog
+	require.NoError(t, model.LOG_DB.Where("model_name = ?", "trace-test").Find(&errorRows).Error)
+	for _, row := range errorRows {
+		assert.Equal(t, model.LogTypeError, row.Type)
+	}
+	common.LogConsumeEnabled = false
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+	ctx.Request.Header.Set("X-Trace-Id", "disabled")
+	model.RecordConsumeLog(ctx, 1, model.RecordConsumeLogParams{ModelName: "disabled"})
+	model.RecordLog(1, model.LogTypeTrace, common.NewMessage("disabled"))
+	var count int64
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("model_name = ? OR content = ?", "disabled", "disabled").Count(&count).Error)
+	assert.Zero(t, count, "trace requests respect the consume log switch")
 }
 
 func TestLogExportRules(t *testing.T) {

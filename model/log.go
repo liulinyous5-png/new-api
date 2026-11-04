@@ -183,17 +183,34 @@ const (
 	LogTypeError   = 5
 	LogTypeRefund  = 6
 	LogTypeLogin   = 7
+	// LogTypeTrace is a consume log with a valid client correlation header.
+	LogTypeTrace = 8
 )
+
+func isConsumeLogType(logType int) bool {
+	return logType == LogTypeConsume || logType == LogTypeTrace
+}
+
+// Consumption totals include both ordinary and traced requests. Explicit type
+// filters select one subset, matching the list and export endpoints.
+func applyConsumeLogTypeFilter(tx *gorm.DB, logType int) *gorm.DB {
+	if isConsumeLogType(logType) {
+		return tx.Where("type = ?", logType)
+	}
+	return tx.Where("type IN ?", []int{LogTypeConsume, LogTypeTrace})
+}
 
 const clientTraceIDMaxBytes = 128
 
 // applyClientTraceIDs copies optional client correlation headers into the
 // public consume/error log metadata. Missing, blank, or unsafe values are
 // left unset so clients that do not send a header keep the previous log shape.
-func applyClientTraceIDs(c *gin.Context, other *LogOther) *LogOther {
+// The boolean reports a valid trace/request header; a session ID alone does not qualify.
+func applyClientTraceIDs(c *gin.Context, other *LogOther) (*LogOther, bool) {
 	if c == nil || c.Request == nil {
-		return other
+		return other, false
 	}
+	isTrace := false
 	headers := [...]struct {
 		header string
 		field  string
@@ -220,8 +237,11 @@ func applyClientTraceIDs(c *gin.Context, other *LogOther) *LogOther {
 			other = NewLogOther()
 		}
 		other.SetPublic(item.field, value)
+		if item.field == "trace_id" || item.field == "client_request_id" {
+			isTrace = true
+		}
 	}
-	return other
+	return other, isTrace
 }
 
 func ensureLogRequestId(log *Log) {
@@ -327,7 +347,7 @@ func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
 }
 
 func RecordLog(userId int, logType int, content *common.Message) {
-	if logType == LogTypeConsume && !common.LogConsumeEnabled {
+	if isConsumeLogType(logType) && !common.LogConsumeEnabled {
 		return
 	}
 	username, _ := GetUsernameById(userId, false)
@@ -349,7 +369,7 @@ func RecordLog(userId int, logType int, content *common.Message) {
 // RecordLogWithAdminInfo stores operator metadata under other.admin_info and
 // an optional, user-visible operation descriptor under other.op for localization.
 func RecordLogWithAdminInfo(userId int, logType int, content string, adminInfo *AuditAdminInfo, operation *AuditOperation, request ...*gin.Context) {
-	if logType == LogTypeConsume && !common.LogConsumeEnabled {
+	if isConsumeLogType(logType) && !common.LogConsumeEnabled {
 		return
 	}
 	username, _ := GetUsernameById(userId, false)
@@ -462,7 +482,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
-	other = applyClientTraceIDs(c, other)
+	other, _ = applyClientTraceIDs(c, other)
 	otherStr := other.JSONString()
 	// 判断是否需要记录 IP
 	needRecordIp := false
@@ -526,7 +546,12 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	if !common.LogConsumeEnabled {
 		return
 	}
-	params.Other = applyClientTraceIDs(c, params.Other)
+	var isTrace bool
+	params.Other, isTrace = applyClientTraceIDs(c, params.Other)
+	logType := LogTypeConsume
+	if isTrace {
+		logType = LogTypeTrace
+	}
 	logger.LogInfo(c, common.LogText("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
@@ -546,7 +571,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		UserId:           userId,
 		Username:         username,
 		CreatedAt:        createdAt,
-		Type:             LogTypeConsume,
+		Type:             logType,
 		Content:          content,
 		PromptTokens:     params.PromptTokens,
 		CompletionTokens: params.CompletionTokens,
@@ -618,7 +643,7 @@ type RecordTaskBillingLogParams struct {
 }
 
 func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
-	if params.LogType == LogTypeConsume && !common.LogConsumeEnabled {
+	if isConsumeLogType(params.LogType) && !common.LogConsumeEnabled {
 		return
 	}
 	username, _ := GetUsernameById(params.UserId, false)
@@ -648,7 +673,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	if err != nil {
 		common.SysLog(common.LogText("failed to record task billing log: %s", err.Error()))
 	}
-	if params.LogType == LogTypeConsume && common.DataExportEnabled {
+	if isConsumeLogType(params.LogType) && common.DataExportEnabled {
 		nodeName := params.NodeName
 		if nodeName == "" {
 			nodeName = common.NodeName
@@ -1057,8 +1082,8 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 		rpmTpmQuery = rpmTpmQuery.Where(logGroupCol+" = ?", group)
 	}
 
-	tx = tx.Where("type = ?", LogTypeConsume)
-	rpmTpmQuery = rpmTpmQuery.Where("type = ?", LogTypeConsume)
+	tx = applyConsumeLogTypeFilter(tx, logType)
+	rpmTpmQuery = applyConsumeLogTypeFilter(rpmTpmQuery, logType)
 
 	// 只统计最近60秒的rpm和tpm
 	rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", time.Now().Add(-60*time.Second).Unix())
@@ -1099,7 +1124,7 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	if modelName != "" {
 		tx = tx.Where("model_name = ?", modelName)
 	}
-	tx.Where("type = ?", LogTypeConsume).Scan(&token)
+	applyConsumeLogTypeFilter(tx, logType).Scan(&token)
 	return token
 }
 

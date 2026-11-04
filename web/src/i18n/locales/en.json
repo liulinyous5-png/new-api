@@ -6687,6 +6687,7 @@
     "Total:": "Total:",
     "TPM": "TPM",
     "Trace ID": "Trace ID",
+    "Trace request": "Trace request",
     "Track per-request consumption to power usage analytics. Keeping this on increases database writes.": "Track per-request consumption to power usage analytics. Keeping this on increases database writes.",
     "Track usage, costs and performance with real-time analytics": "Track usage, costs and performance with real-time analytics",
     "Tracked apps": "Tracked apps",

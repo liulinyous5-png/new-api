@@ -26,12 +26,12 @@ import { DetailsDialog } from '../dialogs/details-dialog'
 
 const queryClients: QueryClient[] = []
 
-function makeLog(other: LogOtherData): UsageLog {
+function makeLog(other: LogOtherData, type = 2): UsageLog {
   return {
     id: 1,
     user_id: 1,
     created_at: 1,
-    type: 2,
+    type,
     content: '',
     username: 'user',
     token_name: 'token',
@@ -52,7 +52,7 @@ function makeLog(other: LogOtherData): UsageLog {
   }
 }
 
-function renderDetails(other: LogOtherData): void {
+function renderDetails(other: LogOtherData, type = 2): void {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -62,7 +62,7 @@ function renderDetails(other: LogOtherData): void {
   render(
     <QueryClientProvider client={queryClient}>
       <DetailsDialog
-        log={makeLog(other)}
+        log={makeLog(other, type)}
         isAdmin={false}
         isRoot={false}
         open
@@ -80,6 +80,16 @@ afterEach(() => {
 })
 
 describe('usage log client trace ids', () => {
+  test('trace request type retains billing, timing, and correlation details', () => {
+    renderDetails({ trace_id: 'trace-8', model_ratio: 1 }, 8)
+
+    expect(screen.getByText('Trace request')).toBeInTheDocument()
+    expect(screen.getByText('trace-8')).toBeInTheDocument()
+    expect(screen.getByText('Billing Details')).toBeInTheDocument()
+    expect(screen.getByText('Response Time')).toBeInTheDocument()
+    expect(screen.queryByText('Request category')).toBeNull()
+  })
+
   test('shows trace, client request, and session ids when the log recorded them', () => {
     renderDetails({
       trace_id: 'trace-1',

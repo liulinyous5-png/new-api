@@ -26,6 +26,7 @@ import {
 } from '@tanstack/react-router'
 import { getCoreRowModel, useReactTable } from '@tanstack/react-table'
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -33,8 +34,11 @@ import {
   within,
 } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import i18next, { createInstance, type i18n } from 'i18next'
+import { I18nextProvider } from 'react-i18next'
 import { afterEach, expect, it, vi } from 'vitest'
 
+import { resources } from '@/i18n/config'
 import { api } from '@/lib/api'
 
 import { CommonLogsFilterBar } from '../common-logs-filter-bar'
@@ -53,7 +57,7 @@ function FilterFixture() {
   )
 }
 
-async function renderFilter() {
+async function renderFilter(language: i18n = i18next) {
   vi.spyOn(api, 'get').mockImplementation(async (url) => ({
     data: {
       success: true,
@@ -76,11 +80,13 @@ async function renderFilter() {
     defaultOptions: { queries: { retry: false } },
   })
   render(
-    <QueryClientProvider client={client}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>
+    <I18nextProvider i18n={language}>
+      <QueryClientProvider client={client}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    </I18nextProvider>
   )
-  await screen.findByRole('combobox', { name: 'Type' })
+  await screen.findByRole('combobox', { name: language.t('Type') })
   return router
 }
 
@@ -126,4 +132,60 @@ it('marks only retired log types as deprecated while keeping historical filters 
   await waitFor(() =>
     expect(router.state.location.search).toMatchObject({ type: ['7'], page: 1 })
   )
+})
+
+it.each(Object.entries(resources))(
+  'loads the trace log label from the real %s translation namespace',
+  async (locale, resource) => {
+    const language = createInstance()
+    await language.init({
+      lng: locale,
+      fallbackLng: false,
+      resources: { [locale]: resource },
+    })
+    expect(language.exists('Trace request')).toBe(true)
+  }
+)
+
+it('selects trace requests in the existing Type filter and translates the selected option when language changes', async () => {
+  const language = createInstance()
+  await language.init({ lng: 'zhCN', fallbackLng: 'en', resources })
+  const router = await renderFilter(language)
+  expect(
+    screen.queryByRole('combobox', { name: /Request category|请求分类/ })
+  ).toBeNull()
+  await userEvent.click(screen.getByRole('combobox', { name: '类型' }))
+  await userEvent.click(screen.getByRole('option', { name: '链路请求' }))
+  await userEvent.click(screen.getByRole('button', { name: '搜索' }))
+  await waitFor(() =>
+    expect(router.state.location.search).toMatchObject({ type: ['8'], page: 1 })
+  )
+  await waitFor(() =>
+    expect(
+      vi
+        .mocked(api.get)
+        .mock.calls.some(
+          ([url]) =>
+            String(url).includes('/stat?') &&
+            new URL(String(url), 'http://localhost').searchParams.get(
+              'type'
+            ) === '8'
+        )
+    ).toBe(true)
+  )
+  expect(router.state.location.search.requestType).toBeUndefined()
+  await act(async () => {
+    await language.changeLanguage('zhTW')
+  })
+  expect(
+    screen.getByRole('combobox', { name: language.t('Type') })
+  ).toHaveTextContent('鏈路請求')
+  await act(async () => {
+    await language.changeLanguage('en')
+  })
+  expect(screen.getByRole('combobox', { name: 'Type' })).toHaveTextContent(
+    'Trace request'
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Reset' }))
+  await waitFor(() => expect(router.state.location.search.type).toEqual(['0']))
 })

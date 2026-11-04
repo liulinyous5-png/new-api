@@ -68,6 +68,7 @@ import {
 } from '../../lib/format'
 import {
   isDisplayableLogType,
+  isConsumeLogType,
   isTimingLogType,
   getLogTypeConfig,
   isPerCallBilling,
@@ -147,7 +148,7 @@ function buildTypeDetailSegments(
     return [{ text: t('Async task refund') }]
   }
 
-  if (log.type !== 2) return []
+  if (!isConsumeLogType(log.type)) return []
 
   const isViolation = isViolationFeeLog(other)
   if (isViolation) {
@@ -821,7 +822,7 @@ export function useCommonLogsColumns(
           const other = parseLogOther(log.other)
 
           const pricingData = usePricingData(
-            log.type === 2 &&
+            isConsumeLogType(log.type) &&
               other?.is_task === true &&
               other.billing_mode === 'tiered_expr'
           )

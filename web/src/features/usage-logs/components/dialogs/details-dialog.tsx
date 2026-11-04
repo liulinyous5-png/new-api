@@ -89,6 +89,7 @@ import {
   getLogTypeConfig,
   isPerCallBilling,
   isTimingLogType,
+  isConsumeLogType,
 } from '../../lib/utils'
 import { USAGE_BILLING_PATH, type LogOtherData } from '../../types'
 import { ResponseModelDetails } from '../model-badge'
@@ -525,7 +526,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
 
   const isViolation = isViolationFeeLog(other)
   const isRefund = props.log.type === 6
-  const isConsume = props.log.type === 2
+  const isConsume = isConsumeLogType(props.log.type)
   const isTopup = props.log.type === 1
   const isManage = props.log.type === 3
   const isSubscription = other?.billing_source === 'subscription'
@@ -1427,5 +1428,5 @@ export function DetailsDialog(props: DetailsDialogProps) {
 }
 
 function isDisplayableType(type: number): boolean {
-  return [0, 2, 5, 6].includes(type)
+  return [0, 2, 5, 6, 8].includes(type)
 }

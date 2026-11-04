@@ -61,6 +61,7 @@ async function chineseTranslator() {
           User: '用户',
           Channel: '渠道',
           Consume: '消费',
+          'Trace request': '链路请求',
           'Top-up': '充值',
           Yes: '是',
           'Recharged {{amount}}': '充值 {{amount}}',
@@ -72,6 +73,16 @@ async function chineseTranslator() {
 }
 
 describe('usage log CSV export', () => {
+  test('trace requests retain usage values in the existing CSV columns', async () => {
+    const t = await chineseTranslator()
+    const row = getLogCsvRow({ ...consumeLog, type: 8 }, false, t)
+    const ordinary = getLogCsvRow(consumeLog, false, t)
+
+    expect(row).toHaveLength(getLogCsvHeader(false, t).length)
+    expect(row[1]).toBe('链路请求')
+    expect(row.slice(2)).toEqual(ordinary.slice(2))
+  })
+
   test('header in the user view has no user or channel column', async () => {
     const t = await chineseTranslator()
 

@@ -94,18 +94,31 @@ func TestApplyClientTraceIDs(t *testing.T) {
 	splitRune := strings.Repeat("b", 127) + "你"
 
 	tests := []struct {
-		name    string
-		headers map[string]string
-		want    string
+		name      string
+		headers   map[string]string
+		want      string
+		wantTrace bool
 	}{
 		{
-			name: "records each present header",
+			name:      "records each present header",
+			wantTrace: true,
 			headers: map[string]string{
 				"X-Trace-Id":        " trace-1 ",
 				"x-request-id":      "client-req",
 				"X-Conversation-Id": "conv-1",
 			},
 			want: `{"model_ratio":1,"trace_id":"trace-1","client_request_id":"client-req","session_id":"conv-1"}`,
+		},
+		{
+			name:      "request header alone marks a trace request",
+			headers:   map[string]string{"X-Request-ID": "client-only"},
+			want:      `{"model_ratio":1,"client_request_id":"client-only"}`,
+			wantTrace: true,
+		},
+		{
+			name:    "conversation alone is not a trace request",
+			headers: map[string]string{"X-Conversation-Id": "session-only"},
+			want:    `{"model_ratio":1,"session_id":"session-only"}`,
 		},
 		{
 			name: "omits blank broken and missing headers",
@@ -123,7 +136,8 @@ func TestApplyClientTraceIDs(t *testing.T) {
 			want: `{"model_ratio":1}`,
 		},
 		{
-			name: "truncates to 128 bytes without splitting a rune",
+			name:      "truncates to 128 bytes without splitting a rune",
+			wantTrace: true,
 			headers: map[string]string{
 				"X-Trace-Id":   longASCII,
 				"X-Request-ID": splitRune,
@@ -147,7 +161,9 @@ func TestApplyClientTraceIDs(t *testing.T) {
 
 			other := NewLogOther()
 			require.True(t, other.SetPublic("model_ratio", 1))
-			require.JSONEq(t, tt.want, applyClientTraceIDs(context, other).JSONString())
+			got, isTrace := applyClientTraceIDs(context, other)
+			require.JSONEq(t, tt.want, got.JSONString())
+			assert.Equal(t, tt.wantTrace, isTrace)
 		})
 	}
 
@@ -157,17 +173,43 @@ func TestApplyClientTraceIDs(t *testing.T) {
 		context.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 		context.Request.Header.Set("X-Trace-Id", "trace-only")
 
-		require.JSONEq(t, `{"trace_id":"trace-only"}`, applyClientTraceIDs(context, nil).JSONString())
+		got, isTrace := applyClientTraceIDs(context, nil)
+		require.JSONEq(t, `{"trace_id":"trace-only"}`, got.JSONString())
+		assert.True(t, isTrace)
 	})
 
 	t.Run("leaves metadata unchanged without a request", func(t *testing.T) {
 		other := NewLogOther()
 		require.True(t, other.SetPublic("model_ratio", 1))
-		require.Same(t, other, applyClientTraceIDs(nil, other))
+		got, isTrace := applyClientTraceIDs(nil, other)
+		require.Same(t, other, got)
+		assert.False(t, isTrace)
 
 		recorder := httptest.NewRecorder()
 		context, _ := gin.CreateTestContext(recorder)
-		require.Nil(t, applyClientTraceIDs(context, nil))
-		require.JSONEq(t, `{"model_ratio":1}`, applyClientTraceIDs(context, other).JSONString())
+		got, isTrace = applyClientTraceIDs(context, nil)
+		require.Nil(t, got)
+		assert.False(t, isTrace)
+		got, isTrace = applyClientTraceIDs(context, other)
+		require.JSONEq(t, `{"model_ratio":1}`, got.JSONString())
+		assert.False(t, isTrace)
 	})
+}
+
+func BenchmarkApplyClientTraceIDs(b *testing.B) {
+	gin.SetMode(gin.TestMode)
+	for _, traced := range []bool{false, true} {
+		b.Run(fmt.Sprintf("traced=%v", traced), func(b *testing.B) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			if traced {
+				ctx.Request.Header.Set("X-Trace-Id", "trace-1")
+				ctx.Request.Header.Set("X-Request-ID", "request-1")
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				applyClientTraceIDs(ctx, nil)
+			}
+		})
+	}
 }
