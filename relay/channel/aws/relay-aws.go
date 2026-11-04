@@ -147,10 +147,6 @@ func doAwsClientRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor,
 		if err != nil {
 			return nil, types.NewError(errors.Wrap(err, "format aws request fail"), types.ErrorCodeBadRequestBody)
 		}
-		if !supportsTopLevelCacheControl(awsModelId) {
-			awsClaudeReq.CacheControl = nil
-		}
-
 		if info.IsStream {
 			awsReq := &bedrockruntime.InvokeModelWithResponseStreamInput{
 				ModelId:     aws.String(awsModelId),
