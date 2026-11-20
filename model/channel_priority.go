@@ -55,9 +55,13 @@ func channelPriorityRevision(items []ChannelPriority) string {
 	return fmt.Sprintf("%x", sha256.Sum256(data))
 }
 
-func GetChannelPriorityOrder() (ChannelPriorityOrder, error) {
+func GetChannelPriorityOrder(scopes ...ChannelScope) (ChannelPriorityOrder, error) {
 	result := ChannelPriorityOrder{Items: []ChannelPriority{}, Changes: []ChannelPriorityChange{}}
-	err := DB.Model(&Channel{}).Select("id", "priority").Order("id").Find(&result.Items).Error
+	query := DB.Model(&Channel{}).Select("id", "priority").Order("id")
+	for _, scope := range scopes {
+		query = scope.Apply(query)
+	}
+	err := query.Find(&result.Items).Error
 	result.Revision = channelPriorityRevision(result.Items)
 	return result, err
 }

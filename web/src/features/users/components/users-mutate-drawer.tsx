@@ -31,6 +31,7 @@ import {
   sideDrawerFormClassName,
   sideDrawerHeaderClassName,
 } from '@/components/drawer-layout'
+import { MultiSelect } from '@/components/multi-select'
 import { PermissionMatrix } from '@/components/permission-matrix'
 import { Button } from '@/components/ui/button'
 import { Combobox } from '@/components/ui/combobox'
@@ -64,6 +65,8 @@ import {
 } from '@/components/ui/sheet'
 import { Textarea } from '@/components/ui/textarea'
 import {
+  ALL_CHANNEL_TYPES,
+  type AdminChannelScope,
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
   EMPTY_PERMISSION_CATALOG,
@@ -115,9 +118,13 @@ export function UsersMutateDrawer({
   const { triggerRefresh, requestVerification } = useUsers()
   const currentUser = useAuthStore((s) => s.auth.user)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [loadedUserId, setLoadedUserId] = useState<number | undefined>(
+    undefined
+  )
   const [quotaDialogOpen, setQuotaDialogOpen] = useState(false)
   // Matrix as loaded from the server; an unchanged matrix is not resubmitted so
   // routine edits of an administrator do not require step-up verification.
+  const loadedScope = useRef<AdminChannelScope | undefined>(undefined)
   const loadedPermissions = useRef<AdminPermissionMatrix | undefined>(undefined)
 
   // Fetch groups
@@ -144,17 +151,27 @@ export function UsersMutateDrawer({
   // Load existing data when updating
   useEffect(() => {
     if (open && isUpdate && currentRow) {
+      let cancelled = false
+      setLoadedUserId(undefined)
+      loadedScope.current = undefined
       // For update, fetch fresh data
       getUser(currentRow.id)
         .then((result) => {
+          if (cancelled) return
           if (result.success && result.data) {
+            loadedScope.current =
+              result.data.admin_channel_scope ?? ALL_CHANNEL_TYPES
             loadedPermissions.current = result.data.admin_permissions
             form.reset(transformUserToFormDefaults(result.data))
+            setLoadedUserId(currentRow.id)
           } else {
             handleServerError(result, t('Failed to load'))
           }
         })
         .catch((error) => handleServerError(error, t('Failed to load')))
+      return () => {
+        cancelled = true
+      }
     } else if (open && !isUpdate) {
       // For create, reset to defaults
       form.reset(USER_FORM_DEFAULT_VALUES)
@@ -201,11 +218,24 @@ export function UsersMutateDrawer({
       ) {
         delete payload.admin_permissions
       }
+      if (
+        !canEditAdminPermissions ||
+        (isUpdate &&
+          (!loadedScope.current ||
+            JSON.stringify(payload.admin_channel_scope) ===
+              JSON.stringify(loadedScope.current)))
+      ) {
+        delete payload.admin_channel_scope
+      }
       // Resetting a password, rewriting admin permissions, or creating an
       // administrator changes who can sign in or what they may do.
       let proofToken: string | undefined
       if (isUpdate && currentRow) {
-        if (payload.password || payload.admin_permissions) {
+        if (
+          payload.password ||
+          payload.admin_permissions ||
+          payload.admin_channel_scope
+        ) {
           const proof = await requestVerification({
             scope: 'admin.user.update',
             context: { user_id: currentRow.id },
@@ -263,6 +293,8 @@ export function UsersMutateDrawer({
     try {
       const result = requireServerSuccess(await getUser(currentRow.id))
       if (result.success && result.data) {
+        loadedScope.current =
+          result.data.admin_channel_scope ?? ALL_CHANNEL_TYPES
         loadedPermissions.current = result.data.admin_permissions
         form.reset(transformUserToFormDefaults(result.data))
       }
@@ -549,6 +581,85 @@ export function UsersMutateDrawer({
                   </SideDrawerSection>
                 )}
 
+              {canEditAdminPermissions && selectedRole === ROLE.ADMIN && (
+                <SideDrawerSection>
+                  <FormField
+                    control={form.control}
+                    name='admin_channel_scope'
+                    render={({ field }) => {
+                      const scope = field.value ?? ALL_CHANNEL_TYPES
+                      return (
+                        <FormItem>
+                          <FormLabel>{t('Channel visibility scope')}</FormLabel>
+                          <Select
+                            disabled={
+                              isUpdate && loadedUserId !== currentRow?.id
+                            }
+                            value={scope.mode}
+                            onValueChange={(mode) => {
+                              if (mode === 'all' || mode === 'selected') {
+                                field.onChange({
+                                  mode,
+                                  types: mode === 'all' ? [] : scope.types,
+                                })
+                              }
+                            }}
+                          >
+                            <FormControl>
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              <SelectItem value='all'>
+                                {t('All channel types')}
+                              </SelectItem>
+                              <SelectItem value='selected'>
+                                {t('Selected channel types')}
+                              </SelectItem>
+                            </SelectContent>
+                          </Select>
+                          {scope.mode === 'selected' && (
+                            <>
+                              <Label htmlFor='admin-channel-types'>
+                                {t('Allowed channel types')}
+                              </Label>
+                              <MultiSelect
+                                id='admin-channel-types'
+                                options={(
+                                  permissionCatalog.channel_types ?? []
+                                ).map((type) => ({
+                                  value: String(type.id),
+                                  label: type.name,
+                                }))}
+                                selected={scope.types.map(String)}
+                                onChange={(types) =>
+                                  field.onChange({
+                                    mode: 'selected',
+                                    types: types.map(Number),
+                                  })
+                                }
+                                placeholder={t('Select channel types')}
+                                disabled={
+                                  !permissionCatalog.channel_types?.length ||
+                                  (isUpdate && loadedUserId !== currentRow?.id)
+                                }
+                              />
+                            </>
+                          )}
+                          <p className='text-muted-foreground text-xs'>
+                            {t(
+                              'All types includes future types. Selected types limits both viewing and managing channels. Changing this scope signs the administrator out.'
+                            )}
+                          </p>
+                          <FormMessage />
+                        </FormItem>
+                      )
+                    }}
+                  />
+                </SideDrawerSection>
+              )}
+
               {/* Binding Information (Read-only) */}
               {isUpdate && (
                 <SideDrawerSection>
@@ -585,7 +696,13 @@ export function UsersMutateDrawer({
             <SheetClose render={<Button variant='outline' />}>
               {t('Close')}
             </SheetClose>
-            <Button form='user-form' type='submit' disabled={isSubmitting}>
+            <Button
+              form='user-form'
+              type='submit'
+              disabled={
+                isSubmitting || (isUpdate && loadedUserId !== currentRow?.id)
+              }
+            >
               {isSubmitting ? t('Saving...') : t('Save changes')}
             </Button>
           </SheetFooter>

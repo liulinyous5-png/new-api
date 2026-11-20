@@ -26,6 +26,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/authz"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -740,7 +741,7 @@ func runChannelUpstreamModelUpdateTaskOnce(ctx context.Context, force bool, allo
 	// Count the enabled channels up front so progress can be reported as a
 	// percentage; a count error is non-fatal (progress just won't show a %).
 	var totalChannels int64
-	if err := model.DB.Model(&model.Channel{}).Where("status = ?", common.ChannelStatusEnabled).Count(&totalChannels).Error; err != nil {
+	if err := model.ChannelScopeFromContext(ctx).Apply(model.DB.Model(&model.Channel{})).Where("status = ?", common.ChannelStatusEnabled).Count(&totalChannels).Error; err != nil {
 		totalChannels = 0
 	}
 	processed := 0
@@ -752,7 +753,7 @@ scanLoop:
 			break
 		}
 		var channels []*model.Channel
-		query := model.DB.
+		query := model.ChannelScopeFromContext(ctx).Apply(model.DB).
 			Select(channelUpstreamModelUpdateSelectFields).
 			Where("status = ?", common.ChannelStatusEnabled).
 			Order("id asc").
@@ -771,7 +772,7 @@ scanLoop:
 		lastID = channels[len(channels)-1].Id
 
 		for _, channel := range channels {
-			if channel == nil {
+			if channel == nil || !authz.ChannelTaskAllows(ctx, channel) {
 				continue
 			}
 			if ctx != nil && ctx.Err() != nil {
@@ -1046,13 +1047,16 @@ func collectPendingApplyUpstreamModelChanges(settings dto.ChannelOtherSettings) 
 	return normalizeModelNames(settings.UpstreamModelUpdateLastDetectedModels), normalizeModelNames(settings.UpstreamModelUpdateLastRemovedModels)
 }
 
-func findEnabledChannelsAfterID(lastID int, batchSize int) ([]*model.Channel, error) {
+func findEnabledChannelsAfterID(lastID int, batchSize int, scopes ...model.ChannelScope) ([]*model.Channel, error) {
 	var channels []*model.Channel
 	query := model.DB.
 		Select(channelUpstreamModelUpdateSelectFields).
 		Where("status = ?", common.ChannelStatusEnabled).
 		Order("id asc").
 		Limit(batchSize)
+	for _, scope := range scopes {
+		query = scope.Apply(query)
+	}
 	if lastID > 0 {
 		query = query.Where("id > ?", lastID)
 	}
@@ -1068,7 +1072,7 @@ func ApplyAllChannelUpstreamModelUpdates(c *gin.Context) {
 
 	lastID := 0
 	for {
-		channels, err := findEnabledChannelsAfterID(lastID, channelUpstreamModelUpdateTaskBatchSize)
+		channels, err := findEnabledChannelsAfterID(lastID, channelUpstreamModelUpdateTaskBatchSize, model.ChannelScopeFromContext(c.Request.Context()))
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -1150,7 +1154,7 @@ func ApplyAllChannelUpstreamModelUpdates(c *gin.Context) {
 // manual run is rejected so the caller does not mistake a scheduled run for this
 // manual one.
 func DetectAllChannelUpstreamModelUpdates(c *gin.Context) {
-	task, created, err := service.EnqueueSystemTask(model.SystemTaskTypeModelUpdate, modelUpdateTaskPayload{Manual: true})
+	task, created, err := service.EnqueueSystemTask(model.SystemTaskTypeModelUpdate, modelUpdateTaskPayload{Manual: true, ActorID: c.GetInt("id")})
 	if err != nil {
 		common.ApiError(c, err)
 		return

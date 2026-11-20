@@ -50,11 +50,12 @@ func registerChannelRoutes(apiRouter *gin.RouterGroup) {
 	)
 
 	for _, route := range channelPermissionRoutes {
-		handlePermissionRoute(channelRoute, route.method, route.path, route.permission, route.handler)
+		handlePermissionRoute(channelRoute, route.method, route.path, route.permission, middleware.RequireChannelScope(), route.handler)
 	}
 }
 
 var channelPermissionRoutes = []permissionRoute{
+	{method: http.MethodGet, path: "/metrics", permission: authz.ChannelRead, handler: controller.GetChannelMetrics},
 	{method: http.MethodGet, path: "/priority/order", permission: authz.ChannelRead, handler: controller.GetChannelPriorityOrder},
 	{method: http.MethodPost, path: "/priority/reorder", permission: authz.ChannelWrite, handler: controller.ReorderChannelPriority},
 	{method: http.MethodGet, path: "/", permission: authz.ChannelRead, handler: controller.GetAllChannels},

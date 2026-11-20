@@ -20,6 +20,7 @@ import { getGroups as getUserGroups } from '@/features/users/api'
 import { api, type ApiRequestConfig } from '@/lib/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
+import type { ChannelMetricsResponse } from './lib/channel-metrics'
 import type { PriorityMove, PriorityOrder } from './lib/channel-priority-order'
 import type { InferenceStatus } from './lib/inference-status'
 import type {
@@ -50,6 +51,22 @@ const channelActionConfig = (
   skipBusinessError: true,
   skipErrorHandler: true,
 })
+
+export async function getChannelMetrics(
+  ids: number[],
+  minutes: number,
+  signal?: AbortSignal
+): Promise<ChannelMetricsResponse> {
+  const response = await api.get<{
+    success: boolean
+    data: ChannelMetricsResponse
+  }>('/api/channel/metrics', {
+    params: { channel_ids: ids.join(','), minutes },
+    signal,
+    disableDuplicate: true,
+  })
+  return requireServerSuccess(response.data).data
+}
 
 export async function getChannelPriorityOrder(): Promise<PriorityOrder> {
   const response = await api.get<{ success: boolean; data: PriorityOrder }>(

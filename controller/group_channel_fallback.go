@@ -33,6 +33,24 @@ func GetGroupChannelFallbacks(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	scope := model.ChannelScopeFromContext(c.Request.Context())
+	if scope.Restricted() {
+		visible := list[:0]
+		for _, item := range list {
+			if !scope.Allows(item.ChannelType) {
+				continue
+			}
+			var count int64
+			if err := scope.Apply(model.DB.Model(&model.Channel{})).Where("id = ?", item.FallbackChannelId).Count(&count).Error; err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			if count == 1 {
+				visible = append(visible, item)
+			}
+		}
+		list = visible
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",

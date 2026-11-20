@@ -31,6 +31,7 @@ import { I18nextProvider } from 'react-i18next'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { api } from '@/lib/api'
+import { formatTimestampToDate } from '@/lib/format'
 
 import type { Channel } from '../../types'
 import { ChannelsProvider } from '../channels-provider'
@@ -51,7 +52,7 @@ function channel(name: string): Channel {
     key: '',
     status: 1,
     name,
-    created_time: 0,
+    created_time: 1735689600,
     test_time: 0,
     response_time: 0,
     other: '',
@@ -87,6 +88,33 @@ afterEach(() => {
 
 async function renderChannelsPage(searchGate: () => Promise<void>) {
   const get = vi.spyOn(api, 'get').mockImplementation(async (url) => {
+    if (url === '/api/channel/metrics') {
+      return {
+        data: {
+          success: true,
+          data: {
+            enabled: true,
+            window_start: 1,
+            window_end: 2,
+            channels: [
+              {
+                channel_id: 3,
+                updated_at: 2,
+                success: 9,
+                failure: 1,
+                excluded: 0,
+                first_success: 8,
+                first_failure: 1,
+                success_rate: 90,
+                first_success_rate: 88.89,
+                results: { success: 9, timeout: 1 },
+                models: [],
+              },
+            ],
+          },
+        },
+      }
+    }
     if (url === '/api/channel/search') {
       await searchGate()
       return {
@@ -152,4 +180,33 @@ it('refetches the channel list with the current filters and marks Refresh busy w
   expect(refresh).toHaveAttribute('aria-busy', 'true')
   release()
   await waitFor(() => expect(refresh).toHaveAttribute('aria-busy', 'false'))
+})
+
+it('preserves channel success rates and creation time when switching between card and table views', async () => {
+  await renderChannelsPage(() => Promise.resolve())
+  const user = userEvent.setup()
+  const createdAt = formatTimestampToDate(1735689600)
+  expect(screen.getByText(createdAt)).toBeVisible()
+  expect(
+    await screen.findByRole('button', { name: 'View channel success rates' })
+  ).toHaveTextContent('90% · 10 attempts')
+  expect(
+    screen.getByRole('button', { name: 'View channel success rates' })
+  ).not.toHaveTextContent('First attempt')
+  await user.click(screen.getByRole('button', { name: 'Table view' }))
+  expect(screen.getByText(createdAt)).toBeVisible()
+  expect(
+    await screen.findByRole('columnheader', { name: /Success rate/ })
+  ).toBeVisible()
+  expect(
+    screen.getByRole('button', { name: 'View channel success rates' })
+  ).toHaveTextContent('90% · 10 attempts')
+  expect(
+    screen.getByRole('button', { name: 'View channel success rates' })
+  ).not.toHaveTextContent('First attempt')
+  await user.click(screen.getByRole('button', { name: 'Card view' }))
+  expect(screen.getByText(createdAt)).toBeVisible()
+  expect(
+    screen.getByRole('button', { name: 'View channel success rates' })
+  ).toHaveTextContent('90% · 10 attempts')
 })

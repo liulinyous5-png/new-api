@@ -747,8 +747,13 @@ func UpdateChannelBalance(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-func updateAllChannelsBalance() error {
-	channels, err := model.GetAllChannels(0, 0, true, false)
+func updateAllChannelsBalance(scopes ...model.ChannelScope) error {
+	var channels []*model.Channel
+	query := model.DB.Model(&model.Channel{})
+	for _, scope := range scopes {
+		query = scope.Apply(query)
+	}
+	err := query.Find(&channels).Error
 	if err != nil {
 		return err
 	}
@@ -779,7 +784,7 @@ func updateAllChannelsBalance() error {
 
 func UpdateAllChannelsBalance(c *gin.Context) {
 	// TODO: make it async
-	err := updateAllChannelsBalance()
+	err := updateAllChannelsBalance(model.ChannelScopeFromContext(c.Request.Context()))
 	if err != nil {
 		common.ApiError(c, err)
 		return

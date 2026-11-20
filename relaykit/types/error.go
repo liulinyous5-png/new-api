@@ -96,6 +96,9 @@ type NewAPIError struct {
 	errorCode      ErrorCode
 	StatusCode     int
 	Metadata       json.RawMessage
+	// OriginalStatusCode preserves the observed response before host status
+	// mappings. It is diagnostic state, never part of a client response.
+	OriginalStatusCode int `json:"-"`
 }
 
 // Unwrap enables errors.Is / errors.As to work with NewAPIError by exposing the underlying error.

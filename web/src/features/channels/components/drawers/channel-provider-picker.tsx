@@ -37,7 +37,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { AutoGroupFlowBorder } from '@/features/keys/components/auto-group-visuals'
 import { PluginIcon } from '@/features/task-plugins/components/plugin-icon'
 import { useMediaQuery } from '@/hooks/use-media-query'
+import { canAccessChannelType } from '@/lib/admin-permissions'
 import { resolveLocalizedText } from '@/lib/localized-text'
+import { useAuthStore } from '@/stores/auth-store'
 
 import type { TaskPluginOption } from '../../api'
 import {
@@ -70,17 +72,18 @@ type ChannelProviderPickerProps = {
 
 export function ChannelProviderPicker(props: ChannelProviderPickerProps) {
   const { t, i18n } = useTranslation()
+  const user = useAuthStore((state) => state.auth.user)
+  const canBindPlugin =
+    props.canBindPlugin && canAccessChannelType(user, CHANNEL_TYPE_TASK_PLUGIN)
   const shouldReduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
   const [search, setSearch] = useState('')
   const [selectedFilter, setSelectedFilter] = useState('all')
   const filter =
-    !props.canBindPlugin && selectedFilter === 'plugin' ? 'all' : selectedFilter
+    !canBindPlugin && selectedFilter === 'plugin' ? 'all' : selectedFilter
   const keyword = search.trim().toLocaleLowerCase()
   const options = useMemo(() => {
     const availablePlugins =
-      props.canBindPlugin && !props.loading && !props.failed
-        ? props.plugins
-        : []
+      canBindPlugin && !props.loading && !props.failed ? props.plugins : []
     const pluginAliases = new Map<string, string>()
     const replacedTypes = new Set<number>()
     if (props.isCreating) {
@@ -88,6 +91,7 @@ export function ChannelProviderPicker(props: ChannelProviderPickerProps) {
         availablePlugins.map((plugin) => plugin.key)
       )
       for (const option of CHANNEL_TYPE_OPTIONS) {
+        if (!canAccessChannelType(user, option.value)) continue
         const pluginKey = LEGACY_TASK_PLUGIN_KEYS[option.value]
         if (!pluginKey) continue
         pluginAliases.set(
@@ -115,8 +119,9 @@ export function ChannelProviderPicker(props: ChannelProviderPickerProps) {
       searchText: string
     }> = []
     for (const option of CHANNEL_TYPE_OPTIONS) {
+      if (!canAccessChannelType(user, option.value)) continue
       if (option.value === CHANNEL_TYPE_TASK_PLUGIN) {
-        if (!props.canBindPlugin || (filter !== 'all' && filter !== 'plugin')) {
+        if (!canBindPlugin || (filter !== 'all' && filter !== 'plugin')) {
           continue
         }
         for (const plugin of props.plugins) {
@@ -185,12 +190,13 @@ export function ChannelProviderPicker(props: ChannelProviderPickerProps) {
     i18n.language,
     keyword,
     props.isCreating,
-    props.canBindPlugin,
+    canBindPlugin,
     props.currentProvider,
     props.loading,
     props.failed,
     props.plugins,
     t,
+    user,
   ])
 
   const customType = Number(search.trim())
@@ -199,9 +205,10 @@ export function ChannelProviderPicker(props: ChannelProviderPickerProps) {
     /^\d+$/.test(search.trim()) &&
     Number.isSafeInteger(customType) &&
     customType > 0 &&
+    canAccessChannelType(user, customType) &&
     !CHANNEL_TYPE_OPTIONS.some((option) => option.value === customType)
   const showPluginStatus =
-    props.canBindPlugin && (filter === 'all' || filter === 'plugin')
+    canBindPlugin && (filter === 'all' || filter === 'plugin')
   let currentProviderId: string | undefined
   if (props.currentProvider?.kind === 'builtin') {
     currentProviderId = `builtin:${props.currentProvider.type}`
@@ -225,7 +232,7 @@ export function ChannelProviderPicker(props: ChannelProviderPickerProps) {
         <TabsTrigger value='builtin' className='h-auto'>
           {t('Built-in')}
         </TabsTrigger>
-        {props.canBindPlugin && (
+        {canBindPlugin && (
           <TabsTrigger value='plugin' className='h-auto'>
             {t('Plugins')}
           </TabsTrigger>

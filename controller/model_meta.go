@@ -42,16 +42,20 @@ func listModelsMeta(c *gin.Context, keyword, vendor string) {
 		// enriched candidate set before counting and paginating the results.
 		offset, limit = 0, -1
 	}
-	search := model.SearchModels
+	var modelsMeta []*model.Model
+	var total int64
+	var err error
+	scope := model.ChannelScopeFromContext(c.Request.Context())
 	if c.Query("include_channel_models") == "true" {
-		search = model.SearchModelsWithChannels
+		modelsMeta, total, err = model.SearchModelsWithChannelsScoped(scope, keyword, vendor, c.Query("status"), c.Query("sync_official"), offset, limit)
+	} else {
+		modelsMeta, total, err = model.SearchModels(keyword, vendor, c.Query("status"), c.Query("sync_official"), offset, limit)
 	}
-	modelsMeta, total, err := search(keyword, vendor, c.Query("status"), c.Query("sync_official"), offset, limit)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	if err := enrichModels(modelsMeta); err != nil {
+	if err := enrichModels(modelsMeta, model.ChannelScopeFromContext(c.Request.Context())); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -96,7 +100,7 @@ func GetModelMeta(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if err := enrichModels([]*model.Model{&m}); err != nil {
+	if err := enrichModels([]*model.Model{&m}, model.ChannelScopeFromContext(c.Request.Context())); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -210,6 +214,10 @@ func DeleteModelMeta(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Model pricing is managed by a super administrator."})
 		return
 	}
+	if removeFromChannels && model.ChannelScopeFromContext(c.Request.Context()).Restricted() {
+		common.ApiErrorStatus(c, http.StatusForbidden, common.NewMessage("This operation requires access to all channel types"))
+		return
+	}
 	result, err := model.DeleteModelMetadata([]int{id}, removeFromChannels, removePricing)
 	if err != nil {
 		common.ApiError(c, err)
@@ -233,6 +241,10 @@ func BatchDeleteModelMeta(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Model pricing is managed by a super administrator."})
 		return
 	}
+	if request.RemoveFromChannels && model.ChannelScopeFromContext(c.Request.Context()).Restricted() {
+		common.ApiErrorStatus(c, http.StatusForbidden, common.NewMessage("This operation requires access to all channel types"))
+		return
+	}
 	result, err := model.DeleteModelMetadata(request.ModelIDs, request.RemoveFromChannels, request.RemovePricing)
 	if err != nil {
 		common.ApiError(c, err)
@@ -244,11 +256,11 @@ func BatchDeleteModelMeta(c *gin.Context) {
 
 // enrichModels keeps configured endpoints intact and derives connections from
 // enabled routes, including hidden or unpriced models absent from the catalog.
-func enrichModels(models []*model.Model) error {
+func enrichModels(models []*model.Model, scopes ...model.ChannelScope) error {
 	if len(models) == 0 {
 		return nil
 	}
-	configured, err := model.GetConfiguredModelChannels()
+	configured, err := model.GetConfiguredModelChannels(scopes...)
 	if err != nil {
 		return err
 	}
@@ -267,7 +279,7 @@ func enrichModels(models []*model.Model) error {
 		}
 		metadata.ConfiguredChannelCount = len(channelIDs)
 	}
-	connections, err := model.GetModelConnections()
+	connections, err := model.GetModelConnections(scopes...)
 	if err != nil {
 		return err
 	}

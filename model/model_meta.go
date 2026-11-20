@@ -173,9 +173,13 @@ func FillModelSquareStates(rows []*Model, configured map[string][]int, connectio
 }
 
 // GetConfiguredModelChannels includes disabled channels and reads no credentials.
-func GetConfiguredModelChannels() (map[string][]int, error) {
+func GetConfiguredModelChannels(scopes ...ChannelScope) (map[string][]int, error) {
 	var channels []Channel
-	if err := DB.Select("id", "models").Find(&channels).Error; err != nil {
+	query := DB.Select("id", "models")
+	for _, scope := range scopes {
+		query = scope.Apply(query)
+	}
+	if err := query.Find(&channels).Error; err != nil {
 		return nil, err
 	}
 	configured := make(map[string][]int)
@@ -190,6 +194,10 @@ func GetConfiguredModelChannels() (map[string][]int, error) {
 // SearchModelsWithChannels augments metadata with concrete configured names.
 // Synthetic rows never persist and never affect the public pricing catalog.
 func SearchModelsWithChannels(keyword, vendor, status, syncOfficial string, offset, limit int) ([]*Model, int64, error) {
+	return SearchModelsWithChannelsScoped(ChannelScope{Mode: "all"}, keyword, vendor, status, syncOfficial, offset, limit)
+}
+
+func SearchModelsWithChannelsScoped(scope ChannelScope, keyword, vendor, status, syncOfficial string, offset, limit int) ([]*Model, int64, error) {
 	records, _, err := SearchModels(keyword, vendor, status, syncOfficial, 0, -1)
 	if err != nil {
 		return nil, 0, err
@@ -197,7 +205,7 @@ func SearchModelsWithChannels(keyword, vendor, status, syncOfficial string, offs
 	_, filterStatus := parseModelStatusFilter(status)
 	_, filterSync := parseModelSyncFilter(syncOfficial)
 	if !filterStatus && !filterSync && (vendor == "" || vendor == "0") {
-		configured, err := GetConfiguredModelChannels()
+		configured, err := GetConfiguredModelChannels(scope)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -411,14 +419,17 @@ type ModelConnection struct {
 	ChannelName string `json:"channel_name"`
 }
 
-func GetModelConnections() ([]ModelConnection, error) {
+func GetModelConnections(scopes ...ChannelScope) ([]ModelConnection, error) {
 	var connections []ModelConnection
-	err := DB.Table("abilities").
+	query := DB.Table("abilities").
 		Select("abilities.*, channels.type as channel_type, channels.name as channel_name").
 		Joins("JOIN channels ON abilities.channel_id = channels.id").
 		Where("abilities.enabled = ? AND channels.status = ?", true, common.ChannelStatusEnabled).
-		Order("abilities.model, abilities.channel_id").
-		Scan(&connections).Error
+		Order("abilities.model, abilities.channel_id")
+	for _, scope := range scopes {
+		query = scope.Apply(query)
+	}
+	err := query.Scan(&connections).Error
 	return connections, err
 }
 

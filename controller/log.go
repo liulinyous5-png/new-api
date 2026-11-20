@@ -30,6 +30,10 @@ func logFilterFromQuery(c *gin.Context, admin bool) model.LogFilter {
 		UpstreamRequestId: c.Query("upstream_request_id"),
 	}
 	if admin {
+		scope := model.ChannelScopeFromContext(c.Request.Context())
+		if scope.Restricted() {
+			filter.ChannelScope = &scope
+		}
 		filter.Username = c.Query("username")
 		filter.Channel, _ = strconv.Atoi(c.Query("channel"))
 	}
@@ -292,7 +296,7 @@ func GetLogsStat(c *gin.Context) {
 	modelName := c.Query("model_name")
 	channel, _ := strconv.Atoi(c.Query("channel"))
 	group := c.Query("group")
-	stat, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
+	stat, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group, model.ChannelScopeFromContext(c.Request.Context()))
 	if err != nil {
 		common.ApiError(c, err)
 		return

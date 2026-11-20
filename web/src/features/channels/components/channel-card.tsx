@@ -74,6 +74,8 @@ function ChannelCardComponent({
   const balanceCell = renderCell('balance')
   const responseCell = renderCell('response_time')
   const testCell = renderCell('test_time')
+  const createdCell = renderCell('created_time')
+  const successRateCell = renderCell('success_rate')
 
   const labelClass = 'text-muted-foreground text-[11px] font-medium select-none'
 
@@ -155,6 +157,18 @@ function ChannelCardComponent({
             </dl>
           </div>
         </StatusBadgeTypeContext.Provider>
+
+        <dl className='flex flex-wrap items-center justify-between gap-x-3 gap-y-1'>
+          <dt className={labelClass}>{t('Success rate')}</dt>
+          <dd className='min-w-0'>{successRateCell}</dd>
+        </dl>
+
+        {!isTagRow && (
+          <dl className='flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1'>
+            <dt className={labelClass}>{t('Created At')}</dt>
+            <dd className='min-w-0 text-xs'>{createdCell}</dd>
+          </dl>
+        )}
 
         {/* Groups retain their compact, full-width footer. */}
         <div className='min-w-0'>

@@ -56,6 +56,7 @@ import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
   hasPermission,
+  hasAllChannelTypes,
 } from '@/lib/admin-permissions'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -257,6 +258,7 @@ export function ChannelsPrimaryButtons() {
             <DropdownMenuSeparator />
 
             <DropdownMenuItem
+              disabled={!hasAllChannelTypes(currentUser)}
               onSelect={(e) => {
                 e.preventDefault()
                 setShowConsistencyDialog(true)
@@ -288,6 +290,11 @@ export function ChannelsPrimaryButtons() {
         </DropdownMenu>
       </div>
 
+      {!hasAllChannelTypes(currentUser) && (
+        <p className='text-muted-foreground text-xs'>
+          {t('Bulk operations only affect channels in your visibility scope.')}
+        </p>
+      )}
       <ConfirmDialog
         open={showDeleteDialog}
         onOpenChange={setShowDeleteDialog}

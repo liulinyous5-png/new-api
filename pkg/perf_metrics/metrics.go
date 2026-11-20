@@ -31,6 +31,7 @@ const recentSuccessHistoryHours = 7 * 24
 
 func Init() {
 	go flushLoop()
+	go channelMetricsLoop()
 }
 
 // RecordRelayResult samples one finished relay exactly once, at the request
@@ -123,9 +124,11 @@ func Record(sample Sample) {
 	}
 	actual, _ := hotBuckets.LoadOrStore(key, &atomicBucket{})
 	actual.(*atomicBucket).add(sample)
-	gopool.Go(func() {
-		recordRedis(key, sample)
-	})
+	if common.RedisEnabled && common.RDB != nil {
+		gopool.Go(func() {
+			recordRedis(key, sample)
+		})
+	}
 }
 
 // queryWindow covers the current partial hour plus the preceding complete

@@ -219,6 +219,7 @@ export async function getPermissionCatalog(): Promise<PermissionCatalog> {
   return {
     resources: res.data?.data?.resources ?? [],
     roles: res.data?.data?.roles ?? [],
+    channel_types: res.data?.data?.channel_types ?? [],
   }
 }
 

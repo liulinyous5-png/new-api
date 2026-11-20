@@ -243,6 +243,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 	started := time.Now()
 	var info *relaycommon.RelayInfo
 	billingPrepared := false
+	metricChannelID := 0
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			apiErr = types.NewError(fmt.Errorf("responses websocket call panic: %v", recovered), types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
@@ -252,6 +253,9 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 			info = &relaycommon.RelayInfo{OriginModelName: modelName, UsingGroup: common.GetContextKeyString(c, appconstant.ContextKeyUsingGroup), StartTime: started}
 		}
 		perfmetrics.RecordRelayResult(c.Request.Context(), info, apiErr)
+		if metricChannelID > 0 {
+			perfmetrics.RecordChannelAttempt(c.Request.Context(), metricChannelID, info, info.RetryIndex == 0, "relay", apiErr)
+		}
 		// Settlement already marks the request policy successful, and nothing
 		// reads a termination decision after this point on the WebSocket path,
 		// so neither policy record belongs here.
@@ -288,6 +292,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 		if apiErr != nil {
 			return apiErr
 		}
+		metricChannelID = s.lockedChannelID
 		if err := s.writeTarget(websocket.TextMessage, payload); err != nil {
 			state.closeCode = websocket.CloseInternalServerErr
 			return types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
@@ -324,9 +329,12 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 			}
 			adaptor := GetAdaptor(info.ApiType)
 			adaptor.Init(info)
+			metricChannelID = channel.Id
 			target, dialErr := relaychannel.DoWssRequest(adaptor, c, info, nil)
 			if dialErr != nil {
 				apiErr = service.NormalizeViolationFeeError(types.NewError(dialErr, types.ErrorCodeDoRequestFailed))
+				perfmetrics.RecordChannelAttempt(c.Request.Context(), metricChannelID, info, info.RetryIndex == 0, "relay", apiErr)
+				metricChannelID = 0
 				service.ResetStatusCode(apiErr, c.GetString("status_code_mapping"))
 				info.LastError = apiErr
 				decision := service.DecideRelayRetry(c, apiErr, common.RetryTimes-retry.GetRetry())

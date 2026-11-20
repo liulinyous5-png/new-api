@@ -403,6 +403,10 @@ func GetChannelsByTag(tag string, idSort bool, selectAll bool, sortOptions ...Ch
 }
 
 func SearchChannels(keyword string, group string, model string, idSort bool, sortOptions ...ChannelSortOptions) ([]*Channel, error) {
+	return SearchChannelsScoped(ChannelScope{Mode: "all"}, keyword, group, model, idSort, sortOptions...)
+}
+
+func SearchChannelsScoped(scope ChannelScope, keyword string, group string, model string, idSort bool, sortOptions ...ChannelSortOptions) ([]*Channel, error) {
 	var channels []*Channel
 	modelsCol := "`models`"
 
@@ -420,7 +424,7 @@ func SearchChannels(keyword string, group string, model string, idSort bool, sor
 	order := resolveChannelSortOptions(idSort, sortOptions)
 
 	// 构造基础查询
-	baseQuery := DB.Model(&Channel{}).Omit("key")
+	baseQuery := scope.Apply(DB.Model(&Channel{})).Omit("key")
 
 	// 构造WHERE子句
 	whereClause := "(id = ? OR name LIKE ? OR " + commonKeyCol + " = ? OR " + baseURLCol + " LIKE ?) AND " + modelsCol + " LIKE ?"
@@ -825,20 +829,20 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 	return true
 }
 
-func EnableChannelByTag(tag string) error {
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusEnabled).Error
+func EnableChannelByTag(tag string, scopes ...ChannelScope) error {
+	err := channelTagQuery(tag, scopes).Update("status", common.ChannelStatusEnabled).Error
 	if err != nil {
 		return err
 	}
-	err = UpdateAbilityStatusByTag(tag, true)
+	err = DB.Model(&Ability{}).Where("channel_id IN (?)", channelTagQuery(tag, scopes).Select("id")).Update("enabled", true).Error
 	return err
 }
 
-func DisableChannelByTag(tag string) error {
+func DisableChannelByTag(tag string, scopes ...ChannelScope) error {
 	// Explicit tag-level disable also cancels automatic restoration for
 	// channels that were already disabled because all keys were unavailable.
 	var channels []Channel
-	if err := DB.Where("tag = ?", tag).Find(&channels).Error; err != nil {
+	if err := channelTagQuery(tag, scopes).Find(&channels).Error; err != nil {
 		return err
 	}
 	for _, channel := range channels {
@@ -848,32 +852,31 @@ func DisableChannelByTag(tag string) error {
 			}
 		}
 	}
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusManuallyDisabled).Error
+	err := channelTagQuery(tag, scopes).Update("status", common.ChannelStatusManuallyDisabled).Error
 	if err != nil {
 		return err
 	}
-	err = UpdateAbilityStatusByTag(tag, false)
+	err = DB.Model(&Ability{}).Where("channel_id IN (?)", channelTagQuery(tag, scopes).Select("id")).Update("enabled", false).Error
 	return err
 }
 
-func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {
+func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string, scopes ...ChannelScope) error {
+	var ids []int
+	if err := channelTagQuery(tag, scopes).Pluck("id", &ids).Error; err != nil {
+		return err
+	}
 	updateData := Channel{}
-	shouldReCreateAbilities := false
-	updatedTag := tag
 	// 如果 newTag 不为空且不等于 tag，则更新 tag
 	if newTag != nil && *newTag != tag {
 		updateData.Tag = newTag
-		updatedTag = *newTag
 	}
 	if modelMapping != nil {
 		updateData.ModelMapping = modelMapping
 	}
 	if models != nil && *models != "" {
-		shouldReCreateAbilities = true
 		updateData.Models = *models
 	}
 	if group != nil && *group != "" {
-		shouldReCreateAbilities = true
 		updateData.Group = *group
 	}
 	if priority != nil {
@@ -889,23 +892,16 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 		updateData.HeaderOverride = headerOverride
 	}
 
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Updates(updateData).Error
+	err := channelTagQuery(tag, scopes).Where("id IN ?", ids).Updates(updateData).Error
 	if err != nil {
 		return err
 	}
-	if shouldReCreateAbilities {
-		channels, err := GetChannelsByTag(updatedTag, false, false)
-		if err == nil {
-			for _, channel := range channels {
-				err = channel.UpdateAbilities(nil)
-				if err != nil {
-					common.SysLog(common.LogText("failed to update abilities: channel_id=%d, tag=%s, error=%v", channel.Id, channel.GetTag(), err))
-				}
-			}
-		}
-	} else {
-		err := UpdateAbilityByTag(tag, newTag, priority, weight)
-		if err != nil {
+	channels, err := GetChannelsByIds(ids)
+	if err != nil {
+		return err
+	}
+	for _, channel := range channels {
+		if err := channel.UpdateAbilities(nil); err != nil {
 			return err
 		}
 	}
@@ -953,7 +949,7 @@ func GetPaginatedChannelTags(query *gorm.DB, offset int, limit int) ([]*string, 
 	return tags, err
 }
 
-func SearchTags(keyword string, group string, model string, idSort bool) ([]*string, error) {
+func SearchTags(keyword string, group string, model string, idSort bool, scopes ...ChannelScope) ([]*string, error) {
 	var tags []*string
 	modelsCol := "`models`"
 
@@ -975,6 +971,9 @@ func SearchTags(keyword string, group string, model string, idSort bool) ([]*str
 
 	// 构造基础查询
 	baseQuery := DB.Model(&Channel{}).Omit("key")
+	for _, scope := range scopes {
+		baseQuery = scope.Apply(baseQuery)
+	}
 
 	// 构造WHERE子句
 	whereClause := "(id = ? OR name LIKE ? OR " + commonKeyCol + " = ? OR " + baseURLCol + " LIKE ?) AND " + modelsCol + " LIKE ?"
@@ -1202,4 +1201,18 @@ func CountChannelsGroupByType() (map[int64]int64, error) {
 		counts[r.Type] = r.Count
 	}
 	return counts, nil
+}
+
+func channelTagQuery(tag string, scopes []ChannelScope) *gorm.DB {
+	query := DB.Model(&Channel{}).Where("tag = ?", tag)
+	for _, scope := range scopes {
+		query = scope.Apply(query)
+	}
+	return query
+}
+
+func GetScopedTagChannels(scope ChannelScope, tag string) ([]*Channel, error) {
+	channels := []*Channel{}
+	err := scope.Apply(DB.Model(&Channel{})).Where("tag = ?", tag).Omit("key").Find(&channels).Error
+	return channels, err
 }

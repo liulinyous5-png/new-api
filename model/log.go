@@ -695,6 +695,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 // LogFilter is the usage-log search shared by the log list and the log export.
 // Username and Channel are administrator filters.
 type LogFilter struct {
+	ChannelScope      *ChannelScope
 	Type              int
 	StartTimestamp    int64
 	EndTimestamp      int64
@@ -713,6 +714,13 @@ func (f LogFilter) apply(tx *gorm.DB) (*gorm.DB, error) {
 
 func (f LogFilter) applyOn(tx *gorm.DB, table string) (*gorm.DB, error) {
 	column := func(name string) string { return table + "." + name }
+	if f.ChannelScope != nil && f.ChannelScope.Restricted() {
+		var ids []int
+		if err := f.ChannelScope.Apply(DB.Model(&Channel{})).Pluck("id", &ids).Error; err != nil {
+			return nil, err
+		}
+		tx = tx.Where("("+column("channel_id")+" IN ? OR "+column("channel_id")+" = 0)", ids)
+	}
 	var err error
 	if f.Type != LogTypeUnknown {
 		tx = tx.Where(column("type")+" = ?", f.Type)
@@ -1045,11 +1053,20 @@ type Stat struct {
 	Tpm   int `json:"tpm"`
 }
 
-func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
+func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string, scopes ...ChannelScope) (stat Stat, err error) {
 	tx := LOG_DB.Table("logs").Select("COALESCE(sum(quota), 0) quota")
 
 	// 为rpm和tpm创建单独的查询
 	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
+	for _, scope := range scopes {
+		filter := LogFilter{ChannelScope: &scope}
+		if tx, err = filter.apply(tx); err != nil {
+			return stat, err
+		}
+		if rpmTpmQuery, err = filter.apply(rpmTpmQuery); err != nil {
+			return stat, err
+		}
+	}
 
 	if tx, err = applyExplicitLogTextFilter(tx, "username", username); err != nil {
 		return stat, err

@@ -20,6 +20,26 @@ import type { AuthUser } from '@/stores/auth-store'
 
 import { ROLE } from './roles'
 
+export type AdminChannelScope = { mode: 'all' | 'selected'; types: number[] }
+export const ALL_CHANNEL_TYPES: AdminChannelScope = { mode: 'all', types: [] }
+
+export function hasAllChannelTypes(user: AuthUser | null | undefined): boolean {
+  const scope = user?.permissions?.admin_channel_scope
+  return (
+    user?.role === ROLE.SUPER_ADMIN || scope == null || scope.mode === 'all'
+  )
+}
+
+export function canAccessChannelType(
+  user: AuthUser | null | undefined,
+  type: number
+): boolean {
+  return (
+    hasAllChannelTypes(user) ||
+    user?.permissions?.admin_channel_scope?.types?.includes(type) === true
+  )
+}
+
 export type AdminPermissionMatrix = Record<string, Record<string, boolean>>
 export type AdminCapabilities = AdminPermissionMatrix
 
@@ -66,6 +86,7 @@ export interface PermissionRoleDef {
 }
 
 export interface PermissionCatalog {
+  channel_types?: Array<{ id: number; name: string }>
   resources: PermissionResourceDef[]
   roles: PermissionRoleDef[]
 }

@@ -328,17 +328,17 @@ func SetApiRouter(router *gin.Engine) {
 		handlePermissionRoute(apiRouter.Group("", middleware.DisableCache(), middleware.AdminAuth()), http.MethodGet, "/audit", authz.AuditRead, controller.GetAuditLogs)
 		apiRouter.GET("/audit/self", middleware.DisableCache(), middleware.UserAuth(), controller.GetAuditLogs)
 		logRoute := apiRouter.Group("/log")
-		logRoute.GET("/", middleware.AdminAuth(), controller.GetAllLogs)
-		logRoute.GET("/stat", middleware.AdminAuth(), controller.GetLogsStat)
+		logRoute.GET("/", middleware.AdminAuth(), middleware.LoadChannelScope(), controller.GetAllLogs)
+		logRoute.GET("/stat", middleware.AdminAuth(), middleware.LoadChannelScope(), controller.GetLogsStat)
 		logRoute.GET("/self/stat", middleware.UserAuth(), controller.GetLogsSelfStat)
 		logRoute.GET("/channel_affinity_usage_cache", middleware.AdminAuth(), controller.GetChannelAffinityUsageCacheStats)
 		logRoute.GET("/search", middleware.AdminAuth(), controller.SearchAllLogs)
 		logRoute.GET("/self", middleware.UserAuth(), controller.GetUserLogs)
-		logRoute.GET("/export", middleware.AdminAuth(), controller.ExportAllLogs)
+		logRoute.GET("/export", middleware.AdminAuth(), middleware.LoadChannelScope(), controller.ExportAllLogs)
 		logRoute.GET("/self/export", middleware.UserAuth(), controller.ExportUserLogs)
-		logRoute.GET("/error", middleware.AdminAuth(), controller.GetAllErrorLogs)
+		logRoute.GET("/error", middleware.AdminAuth(), middleware.LoadChannelScope(), controller.GetAllErrorLogs)
 		logRoute.GET("/error/self", middleware.UserAuth(), controller.GetUserErrorLogs)
-		logRoute.GET("/error/export", middleware.AdminAuth(), controller.ExportAllErrorLogs)
+		logRoute.GET("/error/export", middleware.AdminAuth(), middleware.LoadChannelScope(), controller.ExportAllErrorLogs)
 		logRoute.GET("/error/self/export", middleware.UserAuth(), controller.ExportUserErrorLogs)
 		logRoute.GET("/self/search", middleware.UserAuth(), middleware.SearchRateLimit(), controller.SearchUserLogs)
 
@@ -410,7 +410,7 @@ func SetApiRouter(router *gin.Engine) {
 		}
 
 		modelsRoute := apiRouter.Group("/models")
-		modelsRoute.Use(middleware.AdminAuth())
+		modelsRoute.Use(middleware.AdminAuth(), middleware.LoadChannelScope())
 		{
 			modelsRoute.GET("/sync_upstream/preview", controller.SyncUpstreamPreview)
 			modelsRoute.POST("/sync_upstream", controller.SyncUpstreamModels)

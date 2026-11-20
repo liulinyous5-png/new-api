@@ -19,12 +19,16 @@ For commercial licensing, please contact support@quantumnous.com
 import { create } from 'zustand'
 
 import type { LoginChallenge } from '@/features/auth/secure-verification/types'
-import type { AdminCapabilities } from '@/lib/admin-permissions'
+import type {
+  AdminCapabilities,
+  AdminChannelScope,
+} from '@/lib/admin-permissions'
 
 export type UserPermissions = {
   sidebar_settings?: boolean
   sidebar_modules?: Record<string, unknown>
   admin_permissions?: AdminCapabilities
+  admin_channel_scope?: AdminChannelScope
 }
 
 export interface AuthUser {

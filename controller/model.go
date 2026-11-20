@@ -339,6 +339,26 @@ func DashboardListModels(c *gin.Context) {
 }
 
 func EnabledListModels(c *gin.Context) {
+	scope := model.ChannelScopeFromContext(c.Request.Context())
+	if scope.Restricted() {
+		var channels []*model.Channel
+		if err := scope.Apply(model.DB.Model(&model.Channel{})).Select("models").Where("status = ?", common.ChannelStatusEnabled).Find(&channels).Error; err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		models := []string{}
+		seen := map[string]bool{}
+		for _, channel := range channels {
+			for _, name := range channel.GetModels() {
+				if !seen[name] {
+					models = append(models, name)
+					seen[name] = true
+				}
+			}
+		}
+		c.JSON(200, gin.H{"success": true, "data": models})
+		return
+	}
 	c.JSON(200, gin.H{
 		"success": true,
 		"data":    model.GetEnabledModels(),

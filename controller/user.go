@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -401,6 +402,12 @@ func GetUser(c *gin.Context) {
 		return
 	}
 	user.AdminPermissions = authz.Capabilities(user.Id, user.Role)
+	scope, err := user.ChannelScope()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	user.AdminChannelScope = &scope
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -478,6 +485,7 @@ func GetSelf(c *gin.Context) {
 	// consistent with the authorization decision made for this request.
 	permissions := calculateUserPermissions(userRole)
 	permissions["admin_permissions"] = authz.Capabilities(id, userRole)
+	permissions["admin_channel_scope"] = responseData["admin_channel_scope"]
 	responseData["permissions"] = permissions
 
 	c.JSON(http.StatusOK, gin.H{
@@ -495,33 +503,36 @@ func buildSelfUserData(user *model.User) map[string]any {
 	userSetting := user.GetSetting()
 	permissions := calculateUserPermissions(user.Role)
 	permissions["admin_permissions"] = authz.Capabilities(user.Id, user.Role)
+	scope, _ := user.ChannelScope() // Invalid persisted data produces a deny-all scope.
+	permissions["admin_channel_scope"] = scope
 	return map[string]any{
-		"id":                user.Id,
-		"username":          user.Username,
-		"display_name":      user.DisplayName,
-		"has_password":      user.HasPassword,
-		"role":              user.Role,
-		"status":            user.Status,
-		"email":             user.Email,
-		"github_id":         user.GitHubId,
-		"discord_id":        user.DiscordId,
-		"oidc_id":           user.OidcId,
-		"wechat_id":         user.WeChatId,
-		"telegram_id":       user.TelegramId,
-		"group":             user.Group,
-		"quota":             user.Quota,
-		"used_quota":        user.UsedQuota,
-		"request_count":     user.RequestCount,
-		"aff_code":          user.AffCode,
-		"aff_count":         user.AffCount,
-		"aff_quota":         user.AffQuota,
-		"aff_history_quota": user.AffHistoryQuota,
-		"inviter_id":        user.InviterId,
-		"linux_do_id":       user.LinuxDOId,
-		"setting":           user.Setting,
-		"stripe_customer":   user.StripeCustomer,
-		"sidebar_modules":   userSetting.SidebarModules, // 正确提取sidebar_modules字段
-		"permissions":       permissions,
+		"id":                  user.Id,
+		"username":            user.Username,
+		"display_name":        user.DisplayName,
+		"has_password":        user.HasPassword,
+		"admin_channel_scope": scope,
+		"role":                user.Role,
+		"status":              user.Status,
+		"email":               user.Email,
+		"github_id":           user.GitHubId,
+		"discord_id":          user.DiscordId,
+		"oidc_id":             user.OidcId,
+		"wechat_id":           user.WeChatId,
+		"telegram_id":         user.TelegramId,
+		"group":               user.Group,
+		"quota":               user.Quota,
+		"used_quota":          user.UsedQuota,
+		"request_count":       user.RequestCount,
+		"aff_code":            user.AffCode,
+		"aff_count":           user.AffCount,
+		"aff_quota":           user.AffQuota,
+		"aff_history_quota":   user.AffHistoryQuota,
+		"inviter_id":          user.InviterId,
+		"linux_do_id":         user.LinuxDOId,
+		"setting":             user.Setting,
+		"stripe_customer":     user.StripeCustomer,
+		"sidebar_modules":     userSetting.SidebarModules, // 正确提取sidebar_modules字段
+		"permissions":         permissions,
 	}
 }
 
@@ -650,8 +661,9 @@ func GetUserModels(c *gin.Context) {
 }
 
 func UpdateUser(c *gin.Context) {
-	var updatedUser model.User
-	err := common.DecodeJson(c.Request.Body, &updatedUser)
+	var request adminUserScopeRequest
+	err := common.DecodeJson(c.Request.Body, &request)
+	updatedUser := request.User
 	if err != nil || updatedUser.Id == 0 {
 		common.ApiErrorT(c, "Invalid parameters")
 		return
@@ -680,14 +692,20 @@ func UpdateUser(c *gin.Context) {
 		common.ApiErrorT(c, "No permission to update users of same or higher permission level")
 		return
 	}
+	scope, err := request.channelScope(c, originUser.Role)
+	if err != nil {
+		common.ApiErrorStatus(c, http.StatusBadRequest, common.NewMessage(err.Error()))
+		return
+	}
 	updatePassword := updatedUser.Password != ""
+	permissions := updatedUser.AdminPermissions
 	auditParams := map[string]any{
 		"username": originUser.Username,
 		"id":       updatedUser.Id,
 	}
 	// Resetting a password or rewriting the admin permission matrix changes what
 	// the managed account can do or who can sign in to it.
-	if updatePassword || updatedUser.AdminPermissions != nil {
+	if updatePassword || updatedUser.AdminPermissions != nil || scope != nil {
 		authorization := requireAdminUserProof(c, service.VerificationScopeAdminUserUpdate, service.AdminUserContext{UserID: updatedUser.Id})
 		if authorization == nil {
 			return
@@ -696,12 +714,25 @@ func UpdateUser(c *gin.Context) {
 		auditParams["password_reset"] = updatePassword
 		auditParams["admin_permissions_updated"] = updatedUser.AdminPermissions != nil
 	}
+	if scope != nil {
+		auditParams["channel_scope_before"] = originUser.AdminChannelScopeData
+		auditParams["channel_scope_after"] = scope
+	}
 	authzTouched := false
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := updatedUser.EditWithTx(tx, updatePassword); err != nil {
 			return err
 		}
-		touched, err := updateAdminPermissionsForUserInTx(c, tx, updatedUser.Id, originUser.Role, updatedUser.AdminPermissions)
+		if scope != nil {
+			if err := model.SetAdminChannelScopeInTx(tx, updatedUser.Id, *scope); err != nil {
+				return err
+			}
+			updatedUser.AuthVersion, err = model.IncrementUserAuthVersionWithTx(tx, updatedUser.Id)
+			if err != nil {
+				return err
+			}
+		}
+		touched, err := updateAdminPermissionsForUserInTx(c, tx, updatedUser.Id, originUser.Role, permissions)
 		authzTouched = touched
 		return err
 	}); err != nil {
@@ -997,8 +1028,9 @@ func DeleteSelf(c *gin.Context) {
 }
 
 func CreateUser(c *gin.Context) {
-	var user model.User
-	err := common.DecodeJson(c.Request.Body, &user)
+	var request adminUserScopeRequest
+	err := common.DecodeJson(c.Request.Body, &request)
+	user := request.User
 	user.Username = strings.TrimSpace(user.Username)
 	if err != nil || user.Username == "" || user.Password == "" {
 		common.ApiErrorT(c, "Invalid parameters")
@@ -1020,7 +1052,15 @@ func CreateUser(c *gin.Context) {
 		common.ApiErrorT(c, "Cannot create users with permission level equal to or higher than yourself")
 		return
 	}
+	scope, err := request.channelScope(c, user.Role)
+	if err != nil {
+		common.ApiErrorStatus(c, http.StatusBadRequest, common.NewMessage(err.Error()))
+		return
+	}
 	auditParams := map[string]any{"role": user.Role}
+	if scope != nil {
+		auditParams["channel_scope_after"] = scope
+	}
 	// Creating an administrator grants privilege just like promoting one.
 	if user.Role >= common.RoleAdminUser {
 		authorization := requireAdminUserProof(c, service.VerificationScopeAdminUserCreate, service.AdminUserCreateContext{Role: user.Role})
@@ -1040,6 +1080,11 @@ func CreateUser(c *gin.Context) {
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := cleanUser.InsertWithTx(tx, 0); err != nil {
 			return err
+		}
+		if scope != nil {
+			if err := model.SetAdminChannelScopeInTx(tx, cleanUser.Id, *scope); err != nil {
+				return err
+			}
 		}
 		touched, err := updateAdminPermissionsForUserInTx(c, tx, cleanUser.Id, cleanUser.Role, user.AdminPermissions)
 		authzTouched = touched
@@ -1187,6 +1232,9 @@ func ManageUser(c *gin.Context) {
 	if req.Action == "demote" {
 		if err := model.DB.Transaction(func(tx *gorm.DB) error {
 			if err := user.UpdateWithTx(tx, false); err != nil {
+				return err
+			}
+			if err := model.SetAdminChannelScopeInTx(tx, user.Id, model.ChannelScope{Mode: "all", Types: []int{}}); err != nil {
 				return err
 			}
 			return authz.ClearUserAuthorizationInTx(tx, user.Id)
@@ -1469,4 +1517,27 @@ func UpdateUserSetting(c *gin.Context) {
 	}
 
 	common.ApiSuccessT(c, "Settings updated", nil)
+}
+
+// Separate request presence from the stored value: null must not reset a scope.
+type adminUserScopeRequest struct {
+	model.User
+	Scope json.RawMessage `json:"admin_channel_scope"`
+}
+
+func (request adminUserScopeRequest) channelScope(c *gin.Context, targetRole int) (*model.ChannelScope, error) {
+	if request.Scope == nil {
+		return nil, nil
+	}
+	if c.GetInt("role") != common.RoleRootUser || targetRole != common.RoleAdminUser {
+		return nil, errors.New("Only super administrators can configure channel visibility for administrators")
+	}
+	var scope model.ChannelScope
+	if err := common.Unmarshal(request.Scope, &scope); err != nil {
+		return nil, model.ErrInvalidChannelScope
+	}
+	if err := scope.Normalize(); err != nil {
+		return nil, err
+	}
+	return &scope, nil
 }

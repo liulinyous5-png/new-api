@@ -145,8 +145,11 @@ func applyChannelStatusFilter(query *gorm.DB, statusFilter int) *gorm.DB {
 	return query
 }
 
-func buildChannelListQuery(group string, statusFilter int, typeFilter int) *gorm.DB {
+func buildChannelListQuery(group string, statusFilter int, typeFilter int, scopes ...model.ChannelScope) *gorm.DB {
 	query := model.DB.Model(&model.Channel{})
+	for _, scope := range scopes {
+		query = scope.Apply(query)
+	}
 	query = model.ApplyChannelGroupFilter(query, group)
 	query = applyChannelStatusFilter(query, statusFilter)
 	if typeFilter >= 0 {
@@ -210,13 +213,13 @@ func GetAllChannels(c *gin.Context) {
 	var total int64
 
 	if enableTagMode {
-		tags, err := model.GetPaginatedChannelTags(buildChannelListQuery(groupFilter, statusFilter, typeFilter), pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+		tags, err := model.GetPaginatedChannelTags(buildChannelListQuery(groupFilter, statusFilter, typeFilter, model.ChannelScopeFromContext(c.Request.Context())), pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 		if err != nil {
 			common.SysError(common.LogText("failed to get paginated tags: %s", err.Error()))
 			common.ApiErrorT(c, "Failed to fetch tags. Please try again later")
 			return
 		}
-		total, err = model.CountChannelTags(buildChannelListQuery(groupFilter, statusFilter, typeFilter))
+		total, err = model.CountChannelTags(buildChannelListQuery(groupFilter, statusFilter, typeFilter, model.ChannelScopeFromContext(c.Request.Context())))
 		if err != nil {
 			common.SysError(common.LogText("failed to count tags: %s", err.Error()))
 			common.ApiErrorT(c, "Failed to count tags. Please try again later")
@@ -227,7 +230,7 @@ func GetAllChannels(c *gin.Context) {
 				continue
 			}
 			var tagChannels []*model.Channel
-			err := sortOptions.Apply(buildChannelListQuery(groupFilter, statusFilter, typeFilter).Where("tag = ?", *tag)).
+			err := sortOptions.Apply(buildChannelListQuery(groupFilter, statusFilter, typeFilter, model.ChannelScopeFromContext(c.Request.Context())).Where("tag = ?", *tag)).
 				Omit("key").
 				Find(&tagChannels).Error
 			if err != nil {
@@ -238,13 +241,13 @@ func GetAllChannels(c *gin.Context) {
 			channelData = append(channelData, tagChannels...)
 		}
 	} else {
-		if err := buildChannelListQuery(groupFilter, statusFilter, typeFilter).Count(&total).Error; err != nil {
+		if err := buildChannelListQuery(groupFilter, statusFilter, typeFilter, model.ChannelScopeFromContext(c.Request.Context())).Count(&total).Error; err != nil {
 			common.SysError(common.LogText("failed to count channels: %s", err.Error()))
 			common.ApiErrorT(c, "Failed to count channels. Please try again later")
 			return
 		}
 
-		err := sortOptions.Apply(buildChannelListQuery(groupFilter, statusFilter, typeFilter)).
+		err := sortOptions.Apply(buildChannelListQuery(groupFilter, statusFilter, typeFilter, model.ChannelScopeFromContext(c.Request.Context()))).
 			Limit(pageInfo.GetPageSize()).
 			Offset(pageInfo.GetStartIdx()).
 			Omit("key").
@@ -260,7 +263,7 @@ func GetAllChannels(c *gin.Context) {
 		clearChannelInfo(datum)
 	}
 
-	countQuery := buildChannelListQuery(groupFilter, statusFilter, -1)
+	countQuery := buildChannelListQuery(groupFilter, statusFilter, -1, model.ChannelScopeFromContext(c.Request.Context()))
 	var results []struct {
 		Type  int64
 		Count int64
@@ -371,7 +374,7 @@ func SearchChannels(c *gin.Context) {
 	enableTagMode, _ := strconv.ParseBool(c.Query("tag_mode"))
 	channelData := make([]*model.Channel, 0)
 	if enableTagMode {
-		tags, err := model.SearchTags(keyword, group, modelKeyword, idSort)
+		tags, err := model.SearchTags(keyword, group, modelKeyword, idSort, model.ChannelScopeFromContext(c.Request.Context()))
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -379,7 +382,7 @@ func SearchChannels(c *gin.Context) {
 		for _, tag := range tags {
 			if tag != nil && *tag != "" {
 				var tagChannels []*model.Channel
-				err := sortOptions.Apply(buildChannelListQuery(group, -1, -1).Where("tag = ?", *tag)).
+				err := sortOptions.Apply(buildChannelListQuery(group, -1, -1, model.ChannelScopeFromContext(c.Request.Context())).Where("tag = ?", *tag)).
 					Omit("key").
 					Find(&tagChannels).Error
 				if err != nil {
@@ -390,7 +393,7 @@ func SearchChannels(c *gin.Context) {
 			}
 		}
 	} else {
-		channels, err := model.SearchChannels(keyword, group, modelKeyword, idSort, sortOptions)
+		channels, err := model.SearchChannelsScoped(model.ChannelScopeFromContext(c.Request.Context()), keyword, group, modelKeyword, idSort, sortOptions)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -935,13 +938,13 @@ func DeleteChannel(c *gin.Context) {
 
 func DeleteDisabledChannel(c *gin.Context) {
 	var ids []int
-	if err := model.DB.Model(&model.Channel{}).
+	if err := model.ChannelScopeFromContext(c.Request.Context()).Apply(model.DB.Model(&model.Channel{})).
 		Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).
 		Pluck("id", &ids).Error; err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	rows, err := model.DeleteDisabledChannel()
+	rows, err := model.BatchDeleteChannels(ids)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -981,13 +984,13 @@ func DisableTagChannels(c *gin.Context) {
 		common.ApiErrorT(c, "Invalid parameters")
 		return
 	}
-	channels, err := model.GetChannelsByTag(channelTag.Tag, false, false)
+	channels, err := model.GetScopedTagChannels(model.ChannelScopeFromContext(c.Request.Context()), channelTag.Tag)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	ids := channelIDsFromChannels(channels)
-	err = model.DisableChannelByTag(channelTag.Tag)
+	err = model.DisableChannelByTag(channelTag.Tag, model.ChannelScopeFromContext(c.Request.Context()))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -1011,7 +1014,7 @@ func EnableTagChannels(c *gin.Context) {
 		common.ApiErrorT(c, "Invalid parameters")
 		return
 	}
-	err = model.EnableChannelByTag(channelTag.Tag)
+	err = model.EnableChannelByTag(channelTag.Tag, model.ChannelScopeFromContext(c.Request.Context()))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -1059,7 +1062,7 @@ func EditTagChannels(c *gin.Context) {
 		}
 		channelTag.HeaderOverride = common.GetPointer[string](trimmed)
 	}
-	err = model.EditChannelByTag(channelTag.Tag, channelTag.NewTag, channelTag.ModelMapping, channelTag.Models, channelTag.Groups, channelTag.Priority, channelTag.Weight, channelTag.ParamOverride, channelTag.HeaderOverride)
+	err = model.EditChannelByTag(channelTag.Tag, channelTag.NewTag, channelTag.ModelMapping, channelTag.Models, channelTag.Groups, channelTag.Priority, channelTag.Weight, channelTag.ParamOverride, channelTag.HeaderOverride, model.ChannelScopeFromContext(c.Request.Context()))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -1615,7 +1618,7 @@ func GetTagModels(c *gin.Context) {
 		return
 	}
 
-	channels, err := model.GetChannelsByTag(tag, false, false) // idSort=false, selectAll=false
+	channels, err := model.GetScopedTagChannels(model.ChannelScopeFromContext(c.Request.Context()), tag) // idSort=false, selectAll=false
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,

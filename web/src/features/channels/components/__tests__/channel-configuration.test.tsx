@@ -651,6 +651,33 @@ test('plugin loading failure can be retried while built-in providers remain sele
   expect(await screen.findByRole('option', { name: /Video A/ })).toBeVisible()
 })
 
+test('restricted administrators can only select permitted channel suppliers', async () => {
+  useAuthStore.setState({
+    auth: {
+      ...originalAuth,
+      user: {
+        id: 2,
+        username: 'admin',
+        role: ROLE.ADMIN,
+        permissions: {
+          admin_permissions: { channel: { sensitive_write: true } },
+          admin_channel_scope: { mode: 'selected', types: [1, 14] },
+        },
+      },
+    },
+  })
+  render(<ConfigurationHarness />)
+  expect(screen.getByRole('option', { name: /^OpenAI / })).toBeVisible()
+  expect(
+    screen.queryByRole('option', { name: /Gemini/ })
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole('button', { name: 'Plugins' })
+  ).not.toBeInTheDocument()
+  await userEvent.type(screen.getByRole('combobox'), '999')
+  expect(screen.queryByRole('option')).not.toBeInTheDocument()
+})
+
 test('creating a migrated provider uses its plugin binding instead of the legacy type', async () => {
   pluginOptions = [soraPlugin]
   const post = vi

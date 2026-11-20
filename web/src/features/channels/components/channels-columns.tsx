@@ -31,6 +31,7 @@ import { useState, useMemo, useContext, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { TimestampCell } from '@/components/activity-time-cell'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { BadgeListCell } from '@/components/data-table'
 import { GroupBadge } from '@/components/group-badge'
@@ -88,6 +89,7 @@ import {
 } from '../lib'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
 import type { Channel } from '../types'
+import { ChannelMetricsCell } from './channel-metrics-cell'
 import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
 import { TaskPluginChannelBadge } from './channel-type-badge'
 import { useChannels } from './channels-provider'
@@ -1241,6 +1243,36 @@ export function useChannelsColumns(
           )
         },
         size: 120,
+        enableSorting: false,
+      },
+
+      {
+        id: 'success_rate',
+        header: t('Success rate'),
+        cell: ({ row }) => <ChannelMetricsCell channel={row.original} />,
+        size: 180,
+        enableSorting: false,
+      },
+
+      // Creation Time column
+      {
+        accessorKey: 'created_time',
+        header: t('Created At'),
+        cell: ({ row }) => {
+          if (isTagAggregateRow(row.original)) {
+            return null
+          }
+
+          return (
+            <TimestampCell
+              timestamp={row.original.created_time}
+              format='absolute'
+              justNowLabel={t('Just now')}
+              className='text-muted-foreground text-xs'
+            />
+          )
+        },
+        size: 180,
         enableSorting: false,
       },
 

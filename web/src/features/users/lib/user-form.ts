@@ -22,12 +22,13 @@ import {
   type PermissionCatalog,
   type AdminPermissionMatrix,
   normalizeAdminPermissions,
+  ALL_CHANNEL_TYPES,
 } from '@/lib/admin-permissions'
 import { quotaUnitsToDollars } from '@/lib/format'
 import { ROLE } from '@/lib/roles'
 
 import { DEFAULT_GROUP } from '../constants'
-import { type UserFormData, type User } from '../types'
+import type { UserFormData, User } from '../types'
 
 // ============================================================================
 // Form Schema
@@ -41,6 +42,15 @@ export const userFormSchema = z.object({
   quota_dollars: z.number().min(0).optional(),
   group: z.string().optional(),
   remark: z.string().optional(),
+  admin_channel_scope: z
+    .object({
+      mode: z.enum(['all', 'selected']),
+      types: z.array(z.number().int().positive()),
+    })
+    .refine((scope) => scope.mode === 'all' || scope.types.length > 0, {
+      message: 'Select at least one channel type',
+    })
+    .optional(),
   admin_permissions: z
     .record(z.string(), z.record(z.string(), z.boolean()))
     .optional(),
@@ -62,6 +72,7 @@ export const USER_FORM_DEFAULT_VALUES: UserFormValues = {
   remark: '',
   // Filled against the backend catalog at render time; see UsersMutateDrawer.
   admin_permissions: {},
+  admin_channel_scope: ALL_CHANNEL_TYPES,
 }
 
 // ============================================================================
@@ -94,6 +105,16 @@ export function transformFormDataToPayload(
     )
   }
 
+  if (role === ROLE.ADMIN && data.admin_channel_scope) {
+    payload.admin_channel_scope = {
+      mode: data.admin_channel_scope.mode,
+      types:
+        data.admin_channel_scope.mode === 'all'
+          ? []
+          : [...data.admin_channel_scope.types].sort((a, b) => a - b),
+    }
+  }
+
   // For create: only send required fields
   if (userId === undefined) {
     payload.role = role
@@ -122,5 +143,6 @@ export function transformUserToFormDefaults(user: User): UserFormValues {
     group: user.group || DEFAULT_GROUP,
     remark: user.remark || '',
     admin_permissions: user.admin_permissions ?? {},
+    admin_channel_scope: user.admin_channel_scope ?? ALL_CHANNEL_TYPES,
   }
 }

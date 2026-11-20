@@ -207,16 +207,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
 
-		switch relayFormat {
-		case types.RelayFormatOpenAIRealtime:
-			newAPIError = relay.WssHelper(c, relayInfo)
-		case types.RelayFormatClaude:
-			newAPIError = relay.ClaudeHelper(c, relayInfo)
-		case types.RelayFormatGemini:
-			newAPIError = geminiRelayHandler(c, relayInfo)
-		default:
-			newAPIError = relayHandler(c, relayInfo)
-		}
+		newAPIError = runRelayOnceWithCurrentContext(c, relayInfo, relayFormat)
 
 		if newAPIError == nil {
 			service.MarkRequestPolicySuccess(c, relayInfo.StreamStatus)
@@ -478,7 +469,25 @@ func tryGroupFallbackAfterRetryExhausted(
 	return true, newAPIError
 }
 
-func runRelayOnceWithCurrentContext(c *gin.Context, info *relaycommon.RelayInfo, relayFormat types.RelayFormat) *types.NewAPIError {
+func runRelayOnceWithCurrentContext(c *gin.Context, info *relaycommon.RelayInfo, relayFormat types.RelayFormat) (apiErr *types.NewAPIError) {
+	// Capture each attempt before the next channel resets its result. Fallback
+	// uses this same boundary, including a fresh stream status.
+	info.StreamStatus = nil
+	info.PerformanceBusinessRejection = false
+	channelID := c.GetInt("channel_id")
+	defer func() {
+		recovered := recover()
+		resultErr := apiErr
+		if recovered != nil {
+			resultErr = types.NewError(fmt.Errorf("relay attempt panic: %v", recovered), "channel_attempt_panic")
+		}
+		if relayFormat != types.RelayFormatOpenAIRealtime {
+			perfmetrics.RecordChannelAttempt(c.Request.Context(), channelID, info, info.RetryIndex == 0, "relay", resultErr)
+		}
+		if recovered != nil {
+			panic(recovered)
+		}
+	}()
 	switch relayFormat {
 	case types.RelayFormatOpenAIRealtime:
 		return relay.WssHelper(c, info)
@@ -663,6 +672,33 @@ func executeTaskSubmission(c *gin.Context, relayInfo *relaycommon.RelayInfo) (*t
 
 type taskSubmitAttempt func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *taskdto.TaskError)
 
+func runTaskSubmitAttempt(c *gin.Context, info *relaycommon.RelayInfo, channelID int, first bool, submit taskSubmitAttempt) (result *relay.TaskSubmitResult, taskErr *taskdto.TaskError) {
+	defer func() {
+		recovered := recover()
+		var apiErr *types.NewAPIError
+		if taskErr != nil {
+			cause := taskErr.Error
+			if cause == nil {
+				cause = errors.New(taskErr.Message)
+			}
+			apiErr = types.NewOpenAIError(cause, types.ErrorCode(taskErr.Code), taskErr.StatusCode)
+			if taskErr.LocalError {
+				apiErr = types.NewErrorWithStatusCode(cause, types.ErrorCode(taskErr.Code), taskErr.StatusCode)
+			}
+		}
+		if recovered != nil || (result == nil && taskErr == nil) {
+			apiErr = types.NewError(errors.New("task submission did not return a result"), "channel_attempt_panic")
+		}
+		// Submission acceptance is independent of eventual task completion.
+		sample := &relaycommon.RelayInfo{OriginModelName: info.OriginModelName}
+		perfmetrics.RecordChannelAttempt(c.Request.Context(), channelID, sample, first, "task_submit", apiErr)
+		if recovered != nil {
+			panic(recovered)
+		}
+	}()
+	return submit(c, info)
+}
+
 func executeTaskSubmissionWith(
 	c *gin.Context,
 	relayInfo *relaycommon.RelayInfo,
@@ -738,7 +774,7 @@ func executeTaskSubmissionWith(
 		c.Request.Body = io.NopCloser(bodyStorage)
 
 		stage = "submit"
-		result, taskErr = submit(c, relayInfo)
+		result, taskErr = runTaskSubmitAttempt(c, relayInfo, channel.Id, retryParam.GetRetry() == 0, submit)
 		if requestErr := c.Request.Context().Err(); requestErr != nil {
 			diagnostics.cancelled("after_submit", retryParam.GetRetry()+1)
 			taskErr = service.TaskErrorWrapperLocal(requestErr, "request_cancelled", http.StatusRequestTimeout)

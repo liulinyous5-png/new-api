@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
@@ -50,13 +51,19 @@ func (channelTestHandler) NewPayload() any { return nil }
 // Notify=true to reproduce the legacy manual behavior (test every channel and
 // notify root on completion).
 type channelTestTaskPayload struct {
-	Mode   string `json:"mode,omitempty"`
-	Notify bool   `json:"notify,omitempty"`
+	ActorID int    `json:"actor_id,omitempty"`
+	Mode    string `json:"mode,omitempty"`
+	Notify  bool   `json:"notify,omitempty"`
 }
 
 func (channelTestHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
 	payload := channelTestTaskPayload{}
 	if err := task.DecodePayload(&payload); err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
+	ctx, err := authz.ChannelTaskContext(ctx, payload.ActorID, authz.ChannelOperate)
+	if err != nil {
 		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
 		return
 	}
@@ -97,12 +104,18 @@ func (modelUpdateHandler) NewPayload() any { return nil }
 // semantics: force a re-check regardless of the interval and never auto-apply,
 // so the admin reviews and applies changes explicitly.
 type modelUpdateTaskPayload struct {
-	Manual bool `json:"manual,omitempty"`
+	ActorID int  `json:"actor_id,omitempty"`
+	Manual  bool `json:"manual,omitempty"`
 }
 
 func (modelUpdateHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
 	payload := modelUpdateTaskPayload{}
 	if err := task.DecodePayload(&payload); err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
+	ctx, err := authz.ChannelTaskContext(ctx, payload.ActorID, authz.ChannelOperate)
+	if err != nil {
 		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
 		return
 	}

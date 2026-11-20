@@ -15,6 +15,7 @@ import (
 
 func TestChannelDefaultBaseURLsRequireReadPermission(t *testing.T) {
 	assertChannelRoutePermission(t, http.MethodGet, "/default_base_urls", authz.ChannelRead, controller.GetChannelDefaultBaseURLs)
+	assertChannelRoutePermission(t, http.MethodGet, "/metrics", authz.ChannelRead, controller.GetChannelMetrics)
 
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
@@ -22,6 +23,9 @@ func TestChannelDefaultBaseURLsRequireReadPermission(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/channel/default_base_urls", nil))
 	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+	metricsRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(metricsRecorder, httptest.NewRequest(http.MethodGet, "/api/channel/metrics?channel_ids=1", nil))
+	assert.Equal(t, http.StatusUnauthorized, metricsRecorder.Code)
 }
 
 func TestChannelStatusRoutesUseExpectedPermissions(t *testing.T) {

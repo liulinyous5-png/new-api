@@ -387,3 +387,69 @@ func TestAdminUserVerificationPolicy(t *testing.T) {
 		assert.Zero(t, flows)
 	})
 }
+
+func TestAdminChannelScopeUpdateRequiresProofAndRevokesSessions(t *testing.T) {
+	_, identity, target := setupAdminUserTest(t)
+	require.NoError(t, model.DB.Model(target).Update("role", common.RoleAdminUser).Error)
+	target.Role = common.RoleAdminUser
+	bundle, err := service.CreateLoginSession(target.Id, "password", "127.0.0.1", "scope-test")
+	require.NoError(t, err)
+	body := fmt.Sprintf(`{"id":%d,"username":"managed-user","display_name":"Managed","group":"default","admin_channel_scope":{"mode":"selected","types":[14,1]}}`, target.Id)
+	response := adminUserRequest(http.MethodPut, "/api/user/", body, "", identity, common.RoleRootUser, nil, UpdateUser)
+	assert.Equal(t, http.StatusForbidden, response.Code)
+	stored, err := model.GetUserById(target.Id, false)
+	require.NoError(t, err)
+	assert.Empty(t, stored.AdminChannelScopeData)
+
+	for _, invalid := range []string{`null`, `{}`, `{"mode":"selected","types":[]}`, `{"mode":"selected","types":[999999]}`, `{"mode":"all","types":[1]}`} {
+		response = adminUserRequest(http.MethodPut, "/api/user/", fmt.Sprintf(`{"id":%d,"username":"managed-user","admin_channel_scope":%s}`, target.Id, invalid), "", identity, common.RoleRootUser, nil, UpdateUser)
+		assert.Equal(t, http.StatusBadRequest, response.Code, invalid)
+	}
+	operation := service.VerificationOperation{Scope: service.VerificationScopeAdminUserUpdate, Context: []byte(fmt.Sprintf(`{"user_id":%d}`, target.Id))}
+	proof := issueSecurityEnrollmentProof(t, identity, operation, service.VerificationMethodPassword)
+	response = adminUserRequest(http.MethodPut, "/api/user/", body, proof, identity, common.RoleRootUser, nil, UpdateUser)
+	var result securityEnrollmentResponse
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+	require.True(t, result.Success, response.Body.String())
+	stored, err = model.GetUserById(target.Id, false)
+	require.NoError(t, err)
+	session, err := model.GetUserSessionBySID(bundle.Session.SID)
+	require.NoError(t, err)
+	assert.Equal(t, model.UserSessionStatusRevoked, session.Status)
+	assert.Greater(t, stored.AuthVersion, target.AuthVersion)
+	assert.JSONEq(t, `{"mode":"selected","types":[1,14]}`, stored.AdminChannelScopeData)
+	response = adminUserRequest(http.MethodPut, "/api/user/", body, proof, identity, common.RoleRootUser, nil, UpdateUser)
+	assert.Equal(t, http.StatusForbidden, response.Code)
+	// Omitting the scope preserves it, without demanding another proof.
+	response = adminUserRequest(http.MethodPut, "/api/user/", fmt.Sprintf(`{"id":%d,"username":"managed-user","display_name":"Renamed","group":"default"}`, target.Id), "", identity, common.RoleRootUser, nil, UpdateUser)
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+	require.True(t, result.Success, response.Body.String())
+	stored, err = model.GetUserById(target.Id, false)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"mode":"selected","types":[1,14]}`, stored.AdminChannelScopeData)
+	// An administrator cannot rewrite another administrator's scope.
+	response = adminUserRequest(http.MethodPut, "/api/user/", body, "", identity, common.RoleAdminUser, nil, UpdateUser)
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+	assert.False(t, result.Success)
+	stored, err = model.GetUserById(target.Id, false)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"mode":"selected","types":[1,14]}`, stored.AdminChannelScopeData)
+	// Explicitly returning to all types is supported and also requires proof.
+	proof = issueSecurityEnrollmentProof(t, identity, operation, service.VerificationMethodPassword)
+	body = fmt.Sprintf(`{"id":%d,"username":"managed-user","admin_channel_scope":{"mode":"all","types":[]}}`, target.Id)
+	response = adminUserRequest(http.MethodPut, "/api/user/", body, proof, identity, common.RoleRootUser, nil, UpdateUser)
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+	require.True(t, result.Success, response.Body.String())
+	stored, err = model.GetUserById(target.Id, false)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"mode":"all","types":[]}`, stored.AdminChannelScopeData)
+	// Scope can be configured when creating an administrator as well.
+	createOperation := service.VerificationOperation{Scope: service.VerificationScopeAdminUserCreate, Context: []byte(`{"role":10}`)}
+	proof = issueSecurityEnrollmentProof(t, identity, createOperation, service.VerificationMethodPassword)
+	response = adminUserRequest(http.MethodPost, "/api/user/", `{"username":"new-scoped-admin","password":"scope-fixture-password","role":10,"group":"default","admin_channel_scope":{"mode":"selected","types":[24]}}`, proof, identity, common.RoleRootUser, nil, CreateUser)
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+	require.True(t, result.Success, response.Body.String())
+	var created model.User
+	require.NoError(t, model.DB.Where("username = ?", "new-scoped-admin").First(&created).Error)
+	assert.JSONEq(t, `{"mode":"selected","types":[24]}`, created.AdminChannelScopeData)
+}

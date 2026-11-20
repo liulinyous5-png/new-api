@@ -5,16 +5,20 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestClassifyRelayOutcome(t *testing.T) {
@@ -48,6 +52,224 @@ func TestClassifyRelayOutcome(t *testing.T) {
 		})
 	}
 	assert.Equal(t, OutcomeIgnored, ClassifyRelayOutcome(context.Background(), &relaycommon.RelayInfo{PerformanceBusinessRejection: true}, nil))
+}
+
+func TestChannelAttemptCategories(t *testing.T) {
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		err  *types.NewAPIError
+		want string
+	}{
+		{"success", context.Background(), nil, "success"},
+		{"cancelled read", cancelled, types.NewError(context.Canceled, types.ErrorCodeDoRequestFailed), "cancelled"},
+		{"confirmed failure before cancellation", cancelled, types.InitOpenAIError("server_error", 503), "upstream_server"},
+		{"stream server error without HTTP status", context.Background(), types.InitOpenAIError("server_error", 0), "upstream_server"},
+		{"gateway internal error", context.Background(), types.NewError(errors.New("internal failure"), "internal_error"), "gateway"},
+		{"credentials with misleading status", context.Background(), types.InitOpenAIError("invalid_api_key", 400), "upstream_auth"},
+		{"upstream quota", context.Background(), types.InitOpenAIError("insufficient_quota", 429), "upstream_quota"},
+		{"upstream limit", context.Background(), types.InitOpenAIError("rate_limit_exceeded", 429), "rate_limit"},
+		{"HTTP authentication error with generic type", context.Background(), types.WithOpenAIError(types.OpenAIError{Type: "invalid_request_error"}, 401), "upstream_auth"},
+		{"HTTP rate limit with generic type", context.Background(), types.WithOpenAIError(types.OpenAIError{Type: "invalid_request_error"}, 429), "rate_limit"},
+		{"HTTP server failure with generic type", context.Background(), types.WithOpenAIError(types.OpenAIError{Type: "invalid_request_error"}, 503), "upstream_server"},
+		{"HTTP timeout with generic server code", context.Background(), types.InitOpenAIError("server_error", 504), "timeout"},
+		{"business rejection", context.Background(), types.InitOpenAIError("context_length_exceeded", 500), "business_rejected"},
+		{"deadline", context.Background(), types.NewError(context.DeadlineExceeded, types.ErrorCodeDoRequestFailed), "timeout"},
+		{"network", context.Background(), types.NewError(errors.New("connection refused"), types.ErrorCodeDoRequestFailed), "network"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, classifyChannelAttempt(tc.ctx, &relaycommon.RelayInfo{}, tc.err))
+		})
+	}
+	stream := relaycommon.NewStreamStatus()
+	stream.RequireTerminal()
+	stream.SetEndReason(relaycommon.StreamEndReasonEOF, nil)
+	info := &relaycommon.RelayInfo{IsStream: true, StreamStatus: stream}
+	assert.Equal(t, "protocol", classifyChannelAttempt(context.Background(), info, nil), "200 plus truncated stream must fail")
+	stream.MarkIncomplete("content_filter")
+	assert.Equal(t, "business_rejected", classifyChannelAttempt(context.Background(), info, nil))
+	stream.MarkFailed("server_error", "", 503)
+	assert.Equal(t, "upstream_server", classifyChannelAttempt(cancelled, info, nil))
+	assert.Equal(t, "unknown", classifyChannelAttempt(context.Background(), &relaycommon.RelayInfo{IsStream: true}, nil))
+}
+
+func TestChannelMetricsDatabase(t *testing.T) {
+	for _, dialect := range []struct{ name, env string }{{"sqlite", ""}, {"mysql", "TEST_CHANNEL_MYSQL_DSN"}, {"postgres", "TEST_CHANNEL_POSTGRES_DSN"}} {
+		t.Run(dialect.name, func(t *testing.T) {
+			dsn := ""
+			if dialect.env != "" {
+				dsn = os.Getenv(dialect.env)
+				if dsn == "" {
+					t.Skip("isolated database DSN not configured")
+				}
+			}
+			t.Setenv("SQL_DSN", dsn)
+			oldDB, oldPath, oldMaster := model.DB, common.SQLitePath, common.IsMasterNode
+			oldMain, oldLog := common.MainDatabaseType(), common.LogDatabaseType()
+			common.SQLitePath, common.IsMasterNode = filepath.Join(t.TempDir(), "channel-metrics.db"), true
+			if dialect.name == "sqlite" && os.Getenv("TEST_CHANNEL_SQLITE_PATH") != "" {
+				common.SQLitePath = os.Getenv("TEST_CHANNEL_SQLITE_PATH")
+			}
+			channelCollector.buckets = make(map[channelBucketKey]*channelBucket)
+			t.Cleanup(func() {
+				model.DB, common.SQLitePath, common.IsMasterNode = oldDB, oldPath, oldMaster
+				common.SetDatabaseTypes(oldMain, oldLog)
+				channelCollector.buckets = make(map[channelBucketKey]*channelBucket)
+			})
+			require.NoError(t, model.InitDB())
+			db := model.DB
+			sqlDB, err := db.DB()
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+			// Run the actual startup migration a second time, not just the new
+			// table's migration, before exercising persisted counters.
+			require.NoError(t, model.InitDB())
+			secondDB, err := model.DB.DB()
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, secondDB.Close()) })
+			require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.PerfMetric{}, &model.ChannelMetric{}))
+			channels := []model.Channel{{Name: "metric-first", Type: 1}, {Name: "metric-fallback", Type: 14}}
+			require.NoError(t, db.Create(&channels).Error)
+			t.Cleanup(func() {
+				db.Where("channel_id IN ?", []int{channels[0].Id, channels[1].Id}).Delete(&model.ChannelMetric{})
+				db.Delete(&channels)
+			})
+			ctx := context.Background()
+			info := &relaycommon.RelayInfo{OriginModelName: "model-a"}
+			// A fails then B succeeds; a second request succeeds on A after retry.
+			RecordChannelAttempt(ctx, channels[0].Id, info, true, "relay", types.InitOpenAIError("server_error", 503))
+			RecordChannelAttempt(ctx, channels[1].Id, info, false, "relay", nil)
+			RecordChannelAttempt(ctx, channels[0].Id, info, true, "relay", types.InitOpenAIError("rate_limit_exceeded", 429))
+			RecordChannelAttempt(ctx, channels[0].Id, info, false, "relay", nil)
+			RecordChannelAttempt(ctx, channels[0].Id, info, true, "relay", types.InitOpenAIError("context_length_exceeded", 400))
+			RecordChannelAttempt(ctx, channels[0].Id, &relaycommon.RelayInfo{OriginModelName: "model-b"}, true, "relay", nil)
+			require.NoError(t, FlushChannelMetrics())
+			// Replaying identical committed snapshots cannot inflate counters.
+			var saved []model.ChannelMetric
+			require.NoError(t, db.Where("channel_id IN ?", []int{channels[0].Id, channels[1].Id}).Find(&saved).Error)
+			require.NoError(t, model.SaveChannelMetrics(ctx, saved))
+			require.NoError(t, db.AutoMigrate(&model.ChannelMetric{}))
+			require.NoError(t, db.AutoMigrate(&model.ChannelMetric{}))
+			result, err := QueryChannelMetrics(ctx, []int{channels[0].Id, channels[1].Id}, 5)
+			require.NoError(t, err)
+			require.Len(t, result.Channels, 2)
+			a, b := result.Channels[0], result.Channels[1]
+			assert.Equal(t, int64(2), a.Success)
+			assert.Equal(t, int64(2), a.Failure)
+			assert.Equal(t, int64(1), a.Excluded)
+			require.NotNil(t, a.SuccessRate)
+			assert.Equal(t, 50.0, *a.SuccessRate)
+			require.NotNil(t, a.FirstSuccessRate)
+			assert.Equal(t, 33.33, *a.FirstSuccessRate)
+			assert.Nil(t, b.FirstSuccessRate, "fallback-only channels have no first-attempt sample")
+			require.Len(t, a.Models, 2)
+			assert.Equal(t, int64(1), a.Results["rate_limit"])
+			scoped := model.WithChannelScope(ctx, model.ChannelScope{Mode: "selected", Types: []int{1}})
+			filtered, err := QueryChannelMetrics(scoped, []int{channels[0].Id, channels[1].Id}, 5)
+			require.NoError(t, err)
+			require.Len(t, filtered.Channels, 1)
+			assert.Equal(t, channels[0].Id, filtered.Channels[0].ChannelID)
+			// A second collector snapshot must add to, rather than replace, A.
+			extra := saved[0]
+			extra.ID, extra.ChannelID, extra.ModelName, extra.Result, extra.FirstAttempt, extra.Count = "other-instance", channels[0].Id, "model-a", "success", true, 2
+			require.NoError(t, model.SaveChannelMetrics(ctx, []model.ChannelMetric{extra}))
+			channelCollector.buckets = make(map[channelBucketKey]*channelBucket)
+			restarted, err := QueryChannelMetrics(ctx, []int{channels[0].Id}, 5)
+			require.NoError(t, err)
+			require.Len(t, restarted.Channels, 1)
+			assert.Equal(t, int64(4), restarted.Channels[0].Success)
+			// A queued Midjourney response is a successful submission; a later
+			// transport timeout must remain distinguishable from task failure.
+			RecordMidjourneyAttempt(ctx, channels[1].Id, "mj_imagine", true, &dto.MidjourneyResponseWithStatusCode{StatusCode: 200, Response: dto.MidjourneyResponse{Code: 21}}, nil)
+			RecordMidjourneyAttempt(ctx, channels[1].Id, "mj_imagine", false, nil, context.DeadlineExceeded)
+			require.NoError(t, FlushChannelMetrics())
+			tasks, err := QueryChannelMetrics(ctx, []int{channels[1].Id}, 5)
+			require.NoError(t, err)
+			require.Len(t, tasks.Channels, 1)
+			require.Len(t, tasks.Channels[0].Models, 2)
+			assert.Equal(t, "task_submit", tasks.Channels[0].Models[0].Kind)
+			assert.Equal(t, map[string]int64{"success": 1, "timeout": 1}, tasks.Channels[0].Models[0].Results)
+			// Short windows must query their own history, not reuse an hour's
+			// totals. Samples outside the window (including future rows) stay out.
+			now := time.Now().Unix()
+			history := []model.ChannelMetric{
+				{ID: "window-recent", BucketTs: now - 2*60, Count: 1},
+				{ID: "window-ten-minutes", BucketTs: now - 10*60, Count: 10},
+				{ID: "window-forty-minutes", BucketTs: now - 40*60, Count: 100},
+				{ID: "window-expired", BucketTs: now - 70*60, Count: 1000},
+				{ID: "window-future", BucketTs: now + 2*60, Count: 10000},
+			}
+			for i := range history {
+				history[i].ChannelID, history[i].ModelName, history[i].Kind, history[i].Result = channels[0].Id, "window-model", "relay", "success"
+			}
+			require.NoError(t, model.SaveChannelMetrics(ctx, history))
+			for _, tc := range []struct {
+				minutes   int
+				successes int64
+			}{{5, 1}, {30, 11}, {60, 111}} {
+				window, err := QueryChannelMetrics(ctx, []int{channels[0].Id}, tc.minutes)
+				require.NoError(t, err)
+				require.Len(t, window.Channels, 1)
+				index := slices.IndexFunc(window.Channels[0].Models, func(item ChannelModelMetric) bool { return item.Model == "window-model" })
+				require.GreaterOrEqual(t, index, 0)
+				assert.Equal(t, tc.successes, window.Channels[0].Models[index].Success)
+				assert.GreaterOrEqual(t, window.WindowEnd-window.WindowStart, int64((tc.minutes-1)*60))
+				assert.Less(t, window.WindowEnd-window.WindowStart, int64(tc.minutes*60))
+			}
+			require.NoError(t, model.SaveChannelMetrics(ctx, []model.ChannelMetric{
+				{ID: "model-case-upper", ChannelID: channels[0].Id, BucketTs: now, ModelName: "Case-Sensitive-Model", Kind: "relay", Result: "success", Count: 3},
+				{ID: "model-case-lower", ChannelID: channels[0].Id, BucketTs: now, ModelName: "case-sensitive-model", Kind: "relay", Result: "success", Count: 2},
+			}))
+			caseMetrics, err := QueryChannelMetrics(ctx, []int{channels[0].Id}, 5)
+			require.NoError(t, err)
+			require.Len(t, caseMetrics.Channels, 1)
+			modelCounts := map[string]int64{}
+			for _, metric := range caseMetrics.Channels[0].Models {
+				modelCounts[metric.Model] = metric.Success
+			}
+			assert.Equal(t, int64(3), modelCounts["Case-Sensitive-Model"])
+			assert.Equal(t, int64(2), modelCounts["case-sensitive-model"])
+			// Failed writes must remain pending. A request finishing while a
+			// snapshot is being written must survive the following flush as well.
+			recoveryInfo := &relaycommon.RelayInfo{OriginModelName: "flush-recovery-model"}
+			RecordChannelAttempt(ctx, channels[0].Id, recoveryInfo, true, "relay", nil)
+			writeErr := errors.New("injected metrics write failure")
+			require.NoError(t, model.DB.Callback().Create().Before("gorm:create").Register("test:channel-metric-failure", func(tx *gorm.DB) { tx.AddError(writeErr) }))
+			flushErr := FlushChannelMetrics()
+			require.NoError(t, model.DB.Callback().Create().Remove("test:channel-metric-failure"))
+			require.ErrorIs(t, flushErr, writeErr)
+			entered, release := make(chan struct{}), make(chan struct{})
+			var enteredOnce, releaseOnce sync.Once
+			t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+			require.NoError(t, model.DB.Callback().Create().Before("gorm:create").Register("test:channel-metric-pause", func(*gorm.DB) {
+				enteredOnce.Do(func() { close(entered); <-release })
+			}))
+			flushed := make(chan error, 1)
+			go func() { flushed <- FlushChannelMetrics() }()
+			<-entered
+			RecordChannelAttempt(ctx, channels[0].Id, recoveryInfo, true, "relay", nil)
+			releaseOnce.Do(func() { close(release) })
+			flushErr = <-flushed
+			require.NoError(t, model.DB.Callback().Create().Remove("test:channel-metric-pause"))
+			require.NoError(t, flushErr)
+			require.NoError(t, FlushChannelMetrics())
+			recovered, err := QueryChannelMetrics(ctx, []int{channels[0].Id}, 5)
+			require.NoError(t, err)
+			require.Len(t, recovered.Channels, 1)
+			index := slices.IndexFunc(recovered.Channels[0].Models, func(item ChannelModelMetric) bool { return item.Model == recoveryInfo.OriginModelName })
+			require.GreaterOrEqual(t, index, 0)
+			assert.Equal(t, int64(2), recovered.Channels[0].Models[index].Success)
+			var version string
+			query := "SELECT version()"
+			if dialect.name == "sqlite" {
+				query = "SELECT sqlite_version()"
+			}
+			require.NoError(t, db.Raw(query).Scan(&version).Error)
+			t.Logf("verified %s %s", dialect.name, version)
+		})
+	}
 }
 
 func TestStreamOutcomeClassification(t *testing.T) {

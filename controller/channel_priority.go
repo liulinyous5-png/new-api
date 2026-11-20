@@ -10,7 +10,7 @@ import (
 )
 
 func GetChannelPriorityOrder(c *gin.Context) {
-	order, err := model.GetChannelPriorityOrder()
+	order, err := model.GetChannelPriorityOrder(model.ChannelScopeFromContext(c.Request.Context()))
 	if err != nil {
 		common.ApiError(c, err)
 		return

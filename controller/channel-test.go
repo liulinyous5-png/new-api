@@ -27,6 +27,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	hosttypes "github.com/QuantumNous/new-api/types"
 
@@ -1087,6 +1088,9 @@ func performChannelTests(ctx context.Context, channels []*model.Channel, testUse
 		channels,
 		concurrency,
 		func(ctx context.Context, channel *model.Channel) channelTestSummary {
+			if !authz.ChannelTaskAllows(ctx, channel) {
+				return channelTestSummary{}
+			}
 			return testChannelForHealthCheck(ctx, channel, testUserID, allowDisable, disableThreshold)
 		},
 		report,
@@ -1107,7 +1111,8 @@ func runChannelTestTask(ctx context.Context, mode string, notify bool, report fu
 	if err != nil {
 		return channelTestSummary{}, err
 	}
-	channels, err := model.GetAllChannels(0, 0, true, false)
+	var channels []*model.Channel
+	err = model.ChannelScopeFromContext(ctx).Apply(model.DB.Model(&model.Channel{})).Find(&channels).Error
 	if err != nil {
 		return channelTestSummary{}, err
 	}
@@ -1148,8 +1153,9 @@ func selectChannelsForAutomaticTest(channels []*model.Channel, mode string) []*m
 // rejected so the caller does not mistake a scheduled run for this manual one.
 func TestAllChannels(c *gin.Context) {
 	task, created, err := service.EnqueueSystemTask(model.SystemTaskTypeChannelTest, channelTestTaskPayload{
-		Mode:   operation_setting.ChannelTestModeScheduledAll,
-		Notify: true,
+		ActorID: c.GetInt("id"),
+		Mode:    operation_setting.ChannelTestModeScheduledAll,
+		Notify:  true,
 	})
 	if err != nil {
 		common.ApiError(c, err)
